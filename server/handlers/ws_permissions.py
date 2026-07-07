@@ -151,6 +151,8 @@ CHAT_BRIDGE_ALLOWED_MESSAGE_TYPES = frozenset({
     "chat_participant_target",
     # Loot grant triggered by Twitch events (sub/bits/raid)
     "chat_bridge_loot_grant",
+    # Inventory query for !inventory command
+    "chat_participant_inventory",
 })
 
 PLAYER_KNOWN_GAMEPLAY_MESSAGE_TYPES = frozenset({
