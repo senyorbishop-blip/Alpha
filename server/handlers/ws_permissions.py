@@ -95,6 +95,10 @@ DM_ADMIN_MESSAGE_TYPES = frozenset({
     # Chat bridge admin (DM only)
     "dm_chat_bridge_kill_switch",
     "dm_grant_chat_participant_item",
+    "dm_chat_participants_get",
+    "dm_chat_participant_update",
+    "dm_chat_participant_reset",
+    "dm_chat_persistence_mode",
     "hazard_zone_create",
     "hazard_zone_update",
     "hazard_zone_delete",
@@ -161,6 +165,11 @@ CHAT_BRIDGE_ALLOWED_MESSAGE_TYPES = frozenset({
     "chat_participant_me",
     # Arena stats sync (duel end — never touches campaign state)
     "chat_participant_arena_stats_update",
+    # Arena character persistence (load/save the arena-only sheet)
+    "chat_participant_arena_load",
+    "chat_participant_arena_sync",
+    # Arena leaderboard query (!leaderboard)
+    "chat_participant_arena_leaderboard",
     # Arena display event relay (broadcast to overlays, no state change)
     "arena_display_event",
 })

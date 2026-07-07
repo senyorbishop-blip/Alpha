@@ -2,9 +2,35 @@
 server/handlers/__init__.py — Message dispatch and re-exports.
 """
 import logging
+import time as _time
 
 from server.session import Session, User
 from server.handlers.common import manager
+
+# ---------------------------------------------------------------------------
+# Server-side rate limit for the chat_bridge role. The bridge process has its
+# own limiter, but the trust boundary is here: a buggy or compromised bridge
+# must not be able to flood the game server.
+# ---------------------------------------------------------------------------
+_BRIDGE_RATE_WINDOW_SEC = 10.0
+_BRIDGE_RATE_MAX_MSGS = 60
+_bridge_rate_state: dict = {}  # (session_id, user_id) -> [timestamps]
+
+
+def _bridge_rate_limited(session_id: str, user_id: str) -> bool:
+    now = _time.monotonic()
+    key = (session_id, user_id)
+    stamps = [t for t in _bridge_rate_state.get(key, []) if now - t < _BRIDGE_RATE_WINDOW_SEC]
+    limited = len(stamps) >= _BRIDGE_RATE_MAX_MSGS
+    if not limited:
+        stamps.append(now)
+    _bridge_rate_state[key] = stamps
+    # Opportunistic cleanup so stale sessions don't accumulate
+    if len(_bridge_rate_state) > 256:
+        for stale_key in [k for k, v in _bridge_rate_state.items()
+                          if not v or now - v[-1] > _BRIDGE_RATE_WINDOW_SEC * 6]:
+            _bridge_rate_state.pop(stale_key, None)
+    return limited
 
 # Sub-module handler imports
 from server.handlers.tokens import (
@@ -254,6 +280,13 @@ from server.handlers.chat_bridge import (
     handle_dm_grant_chat_participant_item,
     handle_chat_participant_arena_stats_update,
     handle_arena_display_event,
+    handle_chat_participant_arena_load,
+    handle_chat_participant_arena_sync,
+    handle_chat_participant_arena_leaderboard,
+    handle_dm_chat_participants_get,
+    handle_dm_chat_participant_update,
+    handle_dm_chat_participant_reset,
+    handle_dm_chat_persistence_mode,
 )
 from server.handlers.token_placement_secure import handle_token_placed_secure
 from server.handlers.ws_permissions import is_ws_message_allowed_for_role
@@ -495,8 +528,16 @@ async def handle_message(raw: dict, session: Session, user: User):
         # ── Chat Bridge admin (dm role only) ───────────────────────────────
         "dm_chat_bridge_kill_switch":        handle_dm_chat_bridge_kill_switch,
         "dm_grant_chat_participant_item":    handle_dm_grant_chat_participant_item,
+        "dm_chat_participants_get":          handle_dm_chat_participants_get,
+        "dm_chat_participant_update":        handle_dm_chat_participant_update,
+        "dm_chat_participant_reset":         handle_dm_chat_participant_reset,
+        "dm_chat_persistence_mode":          handle_dm_chat_persistence_mode,
         # ── Arena stats sync (chat_bridge role) ────────────────────────────
         "chat_participant_arena_stats_update": handle_chat_participant_arena_stats_update,
+        # ── Arena character persistence + leaderboard (chat_bridge role) ────
+        "chat_participant_arena_load":        handle_chat_participant_arena_load,
+        "chat_participant_arena_sync":        handle_chat_participant_arena_sync,
+        "chat_participant_arena_leaderboard": handle_chat_participant_arena_leaderboard,
         # ── Arena display event relay (chat_bridge role, overlay broadcast) ─
         "arena_display_event": handle_arena_display_event,
     }
@@ -518,6 +559,15 @@ async def handle_message(raw: dict, session: Session, user: User):
                 "type": "error",
                 "payload": {"message": decision.error_message},
             })
+        return
+
+    if getattr(user, "role", "") == "chat_bridge" and _bridge_rate_limited(
+        getattr(session, "id", ""), getattr(user, "id", "")
+    ):
+        logger.warning(
+            "Chat bridge message dropped by server-side rate limit",
+            extra={"msg_type": msg_type, "session_id": getattr(session, "id", None)},
+        )
         return
 
     handler = dispatch.get(msg_type)

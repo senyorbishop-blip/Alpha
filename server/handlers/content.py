@@ -3101,7 +3101,7 @@ async def handle_viewer_emote(payload: dict, session: Session, user: User):
 # PARTY VOTE SYSTEM
 # ═══════════════════════════════════════════════════════════════════
 
-_MAX_POLL_OPTIONS = 4
+_MAX_POLL_OPTIONS = 5
 _MAX_POLL_DURATION_SEC = 600
 _POLL_RESULTS_MODES = {"live", "final"}
 
