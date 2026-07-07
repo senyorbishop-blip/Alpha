@@ -277,28 +277,33 @@
         options: (p.options || []).map(function (o) { return { text: o, votes: 0 }; }),
         total: 0,
       };
+      applyVoteCounts(pollState, p);
       renderPoll();
       return;
     }
 
     if (t === 'poll_updated') {
       if (!pollState) return;
-      var votes = p.votes || {};
-      pollState.options.forEach(function (opt, i) {
-        opt.votes = parseInt(votes[String(i)] || 0, 10);
-      });
-      pollState.total = pollState.options.reduce(function (s, o) { return s + o.votes; }, 0);
+      applyVoteCounts(pollState, p);
       renderPoll();
       return;
     }
 
     if (t === 'poll_closed') {
       hidePoll();
-      var winner = p.winner || '';
-      var count  = p.count  || 0;
-      var total  = p.total  || 0;
-      if (winner) {
-        showWinner(winner, count, total);
+      // Server sends vote_counts (array indexed by option) + total_votes;
+      // compute the winning option here.
+      var counts = Array.isArray(p.vote_counts) ? p.vote_counts : [];
+      var options = p.options || (pollState ? pollState.options.map(function (o) { return o.text; }) : []);
+      var winnerIdx = -1;
+      var winnerCount = 0;
+      counts.forEach(function (c, i) {
+        c = parseInt(c || 0, 10);
+        if (c > winnerCount) { winnerCount = c; winnerIdx = i; }
+      });
+      var total = parseInt(p.total_votes || 0, 10);
+      if (winnerIdx >= 0 && options[winnerIdx]) {
+        showWinner(options[winnerIdx], winnerCount, total);
       }
       pollState = null;
       return;
@@ -307,15 +312,13 @@
     if (t === 'state_sync') {
       // Restore active poll on reconnect
       var active = (p.active_poll) || {};
-      if (active.question && active.options && active.options.length) {
+      if (!active.closed && active.question && active.options && active.options.length) {
         pollState = {
           question: active.question,
-          options: active.options.map(function (o, i) {
-            return { text: o, votes: parseInt((active.votes || {})[String(i)] || 0, 10) };
-          }),
+          options: active.options.map(function (o) { return { text: o, votes: 0 }; }),
           total: 0,
         };
-        pollState.total = pollState.options.reduce(function (s, o) { return s + o.votes; }, 0);
+        applyVoteCounts(pollState, active);
         renderPoll();
       }
       return;
@@ -323,6 +326,24 @@
   }
 
   // ── Poll rendering ─────────────────────────────────────────────────────────
+
+  // Server poll payloads carry vote_counts as an array indexed by option
+  // (with total_votes alongside); older shapes used a votes {index: count}
+  // map — accept both.
+  function applyVoteCounts(state, p) {
+    var counts = Array.isArray(p.vote_counts) ? p.vote_counts : null;
+    var legacy = (!counts && p.votes && typeof p.votes === 'object') ? p.votes : null;
+    state.options.forEach(function (opt, i) {
+      if (counts) {
+        opt.votes = parseInt(counts[i] || 0, 10);
+      } else if (legacy) {
+        opt.votes = parseInt(legacy[String(i)] || 0, 10);
+      }
+    });
+    state.total = (typeof p.total_votes === 'number')
+      ? p.total_votes
+      : state.options.reduce(function (s, o) { return s + o.votes; }, 0);
+  }
 
   function renderPoll() {
     if (!pollState) return;

@@ -438,6 +438,15 @@ def init_db():
             world_state TEXT NOT NULL DEFAULT '{}',
             active_poll TEXT NOT NULL DEFAULT '{}',
             show_viewer_presence INTEGER NOT NULL DEFAULT 0,
+            chat_participants TEXT NOT NULL DEFAULT '{}',
+            twitch_channel TEXT NOT NULL DEFAULT '',
+            twitch_channel_id TEXT NOT NULL DEFAULT '',
+            twitch_access_token_enc TEXT NOT NULL DEFAULT '',
+            twitch_refresh_token_enc TEXT NOT NULL DEFAULT '',
+            twitch_token_expires_at REAL NOT NULL DEFAULT 0,
+            twitch_chat_enabled INTEGER NOT NULL DEFAULT 1,
+            overlay_game_token TEXT NOT NULL DEFAULT '',
+            overlay_arena_token TEXT NOT NULL DEFAULT '',
             dm_id TEXT,
             dm_player_key TEXT
         );

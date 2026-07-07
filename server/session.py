@@ -575,6 +575,9 @@ class ChatParticipant:
         "losses": 0,
         "arena_gold": 0,
     })
+    # Full arena progression sheet (class, level, xp, gold, items…) —
+    # opaque to the campaign; written only by the arena sync handler.
+    arena_character: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -657,6 +660,11 @@ class Session:
     chat_participants: dict = field(default_factory=dict)
     chat_bridge_paused: bool = False
     arena_enabled: bool = True
+    # Arena quiet mode: duels queue until the DM signals downtime.
+    arena_quiet: bool = False
+    # What chat-participant data survives between sessions:
+    # "everything" (default) | "stats" (lifetime/arena stats only) | "nothing"
+    chat_persistence_mode: str = "everything"
     # _encumbrance_cache is set dynamically; keyed by user_id → {state, speed_penalty}
     # Not declared here so it doesn't show up in persistence serialisation.
 

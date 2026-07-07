@@ -692,12 +692,27 @@ def _normalize_encumbrance_settings(raw: Any) -> dict:
 
 
 
-def _serialize_chat_participants(participants: dict) -> dict:
-    """Convert ChatParticipant dataclasses to plain dicts for JSON serialization."""
-    out = {}
+def _serialize_chat_participants(participants: dict, persistence_mode: str = "everything") -> dict:
+    """Convert ChatParticipant dataclasses to plain dicts for JSON serialization.
+
+    persistence_mode (DM-configurable per campaign):
+      "everything" — full records
+      "stats"      — names + lifetime/arena stats only (no campaign inventory)
+      "nothing"    — no participant records (the mode itself still persists)
+    """
+    mode = str(persistence_mode or "everything").strip().lower()
+    if mode not in ("everything", "stats", "nothing"):
+        mode = "everything"
+
+    out: dict = {"__config__": {"persistence_mode": mode}}
+    if mode == "nothing":
+        return out
+
     for key, p in participants.items():
+        if key == "__config__":
+            continue
         if hasattr(p, "__dataclass_fields__"):
-            out[key] = {
+            record = {
                 "twitch_username": p.twitch_username,
                 "twitch_user_id": getattr(p, "twitch_user_id", "") or "",
                 "display_name": p.display_name,
@@ -712,9 +727,15 @@ def _serialize_chat_participants(participants: dict) -> dict:
                 "arena_stats": dict(getattr(p, "arena_stats", None) or {
                     "wins": 0, "losses": 0, "arena_gold": 0,
                 }),
+                "arena_character": dict(getattr(p, "arena_character", None) or {}),
             }
         elif isinstance(p, dict):
-            out[key] = p
+            record = dict(p)
+        else:
+            continue
+        if mode == "stats":
+            record["inventory"] = []
+        out[key] = record
     return out
 
 
@@ -748,7 +769,10 @@ def extract_persistable_campaign_state(session: Any) -> dict[str, Any]:
         "corpse_states": _clone(getattr(session, "corpse_states", None) or {}),
         "corpse_dm_config": _clone(getattr(session, "corpse_dm_config", None) or {}),
         "encumbrance_settings": _clone(getattr(session, "encumbrance_settings", None) or {}),
-        "chat_participants": _serialize_chat_participants(getattr(session, "chat_participants", None) or {}),
+        "chat_participants": _serialize_chat_participants(
+            getattr(session, "chat_participants", None) or {},
+            getattr(session, "chat_persistence_mode", "everything"),
+        ),
         "handouts": _clone(getattr(session, "handouts", None) or []),
         "discovery_cards": _clone(getattr(session, "discovery_cards", None) or []),
         "private_story_hooks": _clone(getattr(session, "private_story_hooks", None) or []),

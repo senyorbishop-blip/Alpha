@@ -163,7 +163,7 @@ def _clear_twitch_tokens(session_id: str) -> None:
             "UPDATE campaigns SET "
             "twitch_channel='', twitch_channel_id='', "
             "twitch_access_token_enc='', twitch_refresh_token_enc='', "
-            "twitch_token_expires_at=0, twitch_chat_enabled=1 "
+            "twitch_token_expires_at=0, twitch_chat_enabled=0 "
             "WHERE id=?",
             (session_id,),
         )
@@ -295,13 +295,20 @@ async def twitch_status(session_id: str, request: Request):
         return JSONResponse(status_code=403, content={"error": "Forbidden."})
 
     row = _get_twitch_row(session_id)
+    session = get_session(session_id)
+    persistence_mode = str(getattr(session, "chat_persistence_mode", "everything") or "everything")
+
     if not row or not row.get("twitch_channel"):
-        return JSONResponse(content={"connected": False, "channel": None, "enabled": True})
+        return JSONResponse(content={
+            "connected": False, "channel": None, "enabled": True,
+            "persistence_mode": persistence_mode,
+        })
 
     return JSONResponse(content={
         "connected": True,
         "channel":   row["twitch_channel"],
         "enabled":   bool(row.get("twitch_chat_enabled", 1)),
+        "persistence_mode": persistence_mode,
     })
 
 
@@ -348,10 +355,23 @@ async def twitch_toggle(session_id: str, request: Request):
         )
         conn.commit()
 
-    # Mirror as a kill-switch event on the live session if it's active
+    # Mirror as a kill-switch event on the live session if it's active,
+    # and push the status to the bridge/overlays so the pause is instant.
     session = get_session(session_id)
     if session:
         session.chat_bridge_paused = not enabled
+        try:
+            from server.handlers.common import manager
+            await manager.broadcast(session.id, {
+                "type": "chat_bridge_status",
+                "payload": {
+                    "paused": not enabled,
+                    "arena_enabled": bool(getattr(session, "arena_enabled", True)),
+                    "arena_quiet": bool(getattr(session, "arena_quiet", False)),
+                },
+            })
+        except Exception:
+            logger.exception("Failed to broadcast chat_bridge_status after toggle")
 
     return JSONResponse(content={"ok": True, "enabled": enabled})
 

@@ -102,13 +102,23 @@ def _restore_chat_participants(session: Session, data: dict) -> None:
     If CHAT_BRIDGE_PERSIST_PARTICIPANTS=false (the default), participants are
     restored with is_active=False so they retain their inventory but must
     !join again.  Set to 'true' to restore them as fully active.
+
+    A reserved "__config__" entry carries the per-campaign persistence mode
+    (everything / stats / nothing) chosen by the DM.
     """
     persist = os.environ.get("CHAT_BRIDGE_PERSIST_PARTICIPANTS", "false").strip().lower()
     keep_active = persist in {"1", "true", "yes"}
 
     raw_map = data.get("chat_participants") or {}
+
+    config = raw_map.get("__config__")
+    if isinstance(config, dict):
+        mode = str(config.get("persistence_mode") or "everything").strip().lower()
+        if mode in ("everything", "stats", "nothing"):
+            session.chat_persistence_mode = mode
+
     for key, p in raw_map.items():
-        if not isinstance(p, dict):
+        if key == "__config__" or not isinstance(p, dict):
             continue
         session.chat_participants[key] = ChatParticipant(
             twitch_username=str(p.get("twitch_username") or key),
@@ -116,6 +126,16 @@ def _restore_chat_participants(session: Session, data: dict) -> None:
             joined_at=float(p.get("joined_at") or 0),
             inventory=list(p.get("inventory") or []),
             is_active=keep_active and bool(p.get("is_active", True)),
+            twitch_user_id=str(p.get("twitch_user_id", "") or ""),
+            character_name=str(p.get("character_name", "") or ""),
+            last_joined_session_id=str(p.get("last_joined_session_id", "") or ""),
+            lifetime_stats=dict(p.get("lifetime_stats", None) or {
+                "sessions_joined": 0, "items_used": 0, "damage_dealt": 0, "kills": 0,
+            }),
+            arena_stats=dict(p.get("arena_stats", None) or {
+                "wins": 0, "losses": 0, "arena_gold": 0,
+            }),
+            arena_character=dict(p.get("arena_character", None) or {}),
         )
 
 
