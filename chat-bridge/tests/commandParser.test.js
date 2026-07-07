@@ -51,7 +51,7 @@ describe('CommandParser — !join', () => {
   test('says welcome message on first join', async () => {
     const { parser, twitchClient } = makeParser({ chat_participant_join: { already_joined: false } });
     await parser.handle(CH, TAGS('alice', 'Alice'), '!join');
-    expect(twitchClient.said.some(s => s.msg.includes('joined the tavern'))).toBe(true);
+    expect(twitchClient.said.some(s => s.msg.includes('entered the tavern'))).toBe(true);
   });
 
   test('replies already_joined on idempotent join', async () => {
@@ -102,7 +102,7 @@ describe('CommandParser — !target', () => {
   test('replies usage hint when no target provided', async () => {
     const { parser, twitchClient } = makeParser();
     await parser.handle(CH, TAGS('frank'), '!target');
-    expect(twitchClient.replied.some(r => r.msg.includes('Usage'))).toBe(true);
+    expect(twitchClient.replied.some(r => r.msg.includes('usage'))).toBe(true);
   });
 
   test('strips HTML from target name', async () => {

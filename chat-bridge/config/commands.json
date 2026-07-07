@@ -1,5 +1,5 @@
 {
-  "_comment": "Map Twitch chat commands to bridge actions. Add campaign-specific commands below.",
+  "_comment": "Map Twitch chat commands to bridge actions. Add campaign-specific commands below. _usage_hints maps item-name substrings to per-item usage hints shown in !inventory.",
   "!join":      "join",
   "!leave":     "leave",
   "!inventory": "inventory",
@@ -12,5 +12,19 @@
   "!me":        "me",
   "!duel":      "arena",
   "!accept":    "arena",
-  "!decline":   "arena"
+  "!decline":   "arena",
+  "!attack":    "arena",
+  "!defend":    "arena",
+  "!flee":      "arena",
+  "!bag":       "bag",
+  "!equip":     "equip",
+  "!shop":      "shop",
+  "!buy":       "buy",
+  "!leaderboard": "leaderboard",
+  "!reroll":    "reroll",
+  "!levelup":   "levelup",
+  "_usage_hints": {
+    "potion": "drink it with !use <target>",
+    "scroll": "cast it with !use <target>"
+  }
 }

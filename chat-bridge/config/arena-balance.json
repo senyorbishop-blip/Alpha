@@ -1,0 +1,78 @@
+{
+  "_comment": "All arena progression tuning lives here. xp.curve: xp to go from level L to L+1 = curve_base * L^curve_exponent. drops.chance values are cumulative-rolled per duel win (legendary checked first). damage_die_by_hit_die maps a class hit die to the damage die used in duels — d6 caster classes swing a d10 'spell blast' to compensate for low HP. Items: { name, slot: weapon|armor|trinket, rarity, bonuses: any subset of {str,dex,con,int,wis,cha,hp,atk,ac}, effect: 'second_wind' (legendary, once per duel survive a killing blow at 1 HP) or omitted, flair: cosmetic text }. Shop items marked premium:true always appear in the daily rotation.",
+  "xp": {
+    "win": 50,
+    "loss": 15,
+    "curve_base": 100,
+    "curve_exponent": 1.5,
+    "level_cap": 20,
+    "underdog_level_gap": 3,
+    "underdog_attack_bonus": 2,
+    "underdog_xp_bonus": 25
+  },
+  "gold": {
+    "win": 25,
+    "loss": 5,
+    "streak_bonus": 5,
+    "streak_cap": 25,
+    "first_of_day": 20
+  },
+  "levelup": {
+    "stat_point_every_n_levels": 2,
+    "choice_window_seconds": 60
+  },
+  "drops": {
+    "chance": { "common": 0.25, "uncommon": 0.12, "rare": 0.05, "legendary": 0.01 },
+    "pity_rare_every_n_wins": 10,
+    "tables": {
+      "common": [
+        { "name": "Rusty Dagger",  "slot": "weapon",  "rarity": "common", "bonuses": { "atk": 1 } },
+        { "name": "Leather Cap",   "slot": "armor",   "rarity": "common", "bonuses": { "ac": 1 } },
+        { "name": "Lucky Pebble",  "slot": "trinket", "rarity": "common", "bonuses": { "hp": 2 } }
+      ],
+      "uncommon": [
+        { "name": "Cloak of the Cat", "slot": "trinket", "rarity": "uncommon", "bonuses": { "dex": 2 } },
+        { "name": "Soldier's Blade",  "slot": "weapon",  "rarity": "uncommon", "bonuses": { "atk": 2 } },
+        { "name": "Ring of Vigor",    "slot": "trinket", "rarity": "uncommon", "bonuses": { "hp": 4 } }
+      ],
+      "rare": [
+        { "name": "Flaming Blade",    "slot": "weapon",  "rarity": "rare", "bonuses": { "atk": 3 }, "flair": "wreathed in fire" },
+        { "name": "Guardian Plate",   "slot": "armor",   "rarity": "rare", "bonuses": { "ac": 3, "con": 1 } },
+        { "name": "Amulet of Storms", "slot": "trinket", "rarity": "rare", "bonuses": { "atk": 1, "hp": 6 } }
+      ],
+      "legendary": [
+        { "name": "Phoenix Feather Charm", "slot": "trinket", "rarity": "legendary", "bonuses": { "hp": 5 }, "effect": "second_wind" },
+        { "name": "Blade of the Colossus", "slot": "weapon",  "rarity": "legendary", "bonuses": { "atk": 4, "str": 2 }, "flair": "humming with giant-strength" }
+      ]
+    }
+  },
+  "reroll": {
+    "policy": "free_once",
+    "price": 100
+  },
+  "shop": {
+    "rotation_size": 4,
+    "stock": [
+      { "name": "Iron Sword",      "slot": "weapon",  "rarity": "common",   "bonuses": { "atk": 1 },          "price": 60 },
+      { "name": "Padded Vest",     "slot": "armor",   "rarity": "common",   "bonuses": { "ac": 1 },           "price": 60 },
+      { "name": "Health Charm",    "slot": "trinket", "rarity": "common",   "bonuses": { "hp": 4 },           "price": 50 },
+      { "name": "Boots of Haste",  "slot": "trinket", "rarity": "uncommon", "bonuses": { "dex": 2 },          "price": 90 },
+      { "name": "Bear Totem",      "slot": "trinket", "rarity": "uncommon", "bonuses": { "con": 2 },          "price": 90 },
+      { "name": "Steel Longsword", "slot": "weapon",  "rarity": "uncommon", "bonuses": { "atk": 2 },          "price": 140 },
+      { "name": "Chainmail Shirt", "slot": "armor",   "rarity": "uncommon", "bonuses": { "ac": 2 },           "price": 140 },
+      { "name": "Dragonscale Mail","slot": "armor",   "rarity": "rare",     "bonuses": { "ac": 3, "con": 2 }, "price": 400, "premium": true }
+    ]
+  },
+  "duel": {
+    "interactive_mode": false,
+    "wagers_enabled": true,
+    "max_wager": 100,
+    "message_interval_ms": 5000
+  },
+  "fallback": {
+    "hp": 20,
+    "ac": 12,
+    "damage_die": 6
+  },
+  "damage_die_by_hit_die": { "12": 8, "10": 8, "8": 6, "6": 10 }
+}

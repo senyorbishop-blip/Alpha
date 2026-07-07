@@ -198,6 +198,9 @@ class GameClient {
    *   chat_participant_target  → chat_participant_target_result
    *   chat_bridge_loot_grant   → chat_bridge_loot_grant_result
    *   chat_participant_inventory → chat_participant_inventory_result
+   *   chat_participant_arena_load → chat_participant_arena_load_result
+   *   chat_participant_arena_sync → chat_participant_arena_sync_result
+   *   chat_participant_arena_leaderboard → chat_participant_arena_leaderboard_result
    */
   async send(type, payload = {}, timeoutMs = 5000) {
     await this._ensureConnected();
@@ -219,6 +222,9 @@ class GameClient {
         chat_bridge_poll_vote: 'chat_bridge_poll_vote_result',
         chat_participant_name_set: 'chat_participant_name_result',
         chat_participant_me: 'chat_participant_me_result',
+        chat_participant_arena_load: 'chat_participant_arena_load_result',
+        chat_participant_arena_sync: 'chat_participant_arena_sync_result',
+        chat_participant_arena_leaderboard: 'chat_participant_arena_leaderboard_result',
       }[type];
 
       if (ackType) {

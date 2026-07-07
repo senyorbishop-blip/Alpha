@@ -28,6 +28,8 @@ The bridge connects to the game server as a **privileged service account** (`rol
 
 ---
 
+> **Recommended: connect Twitch from inside the app.** If the DM connects their channel via **campaign settings → Connect Twitch** (OAuth), the bridge fetches the channel and tokens per campaign from the game server automatically — steps 1–2 below then only matter as an env-var fallback, and multiple DMs can each run their own channel. The env vars `TWITCH_CLIENT_ID` / `TWITCH_CLIENT_SECRET` remain the app-level client credentials used by that flow.
+
 ## 1. Create a Twitch Bot Account (for chat)
 
 1. Log in to [twitch.tv](https://twitch.tv) with a **separate bot account** (e.g. `MyTavernBot`). Using your main avoids spam-filter issues.
@@ -124,7 +126,7 @@ Bits tiers are configured as an array with `threshold` values — the highest th
 
 ## 6. Add Custom Chat Commands
 
-Edit `config/commands.json`. Currently supported actions are `join`, `leave`, `inventory`, `target`. Map any command prefix to one of these actions:
+Edit `config/commands.json`. Supported actions are `join`, `leave`, `inventory`, `target`, `help`, `vote`, `name`, `me`, `bag`, `equip`, `shop`, `buy`, `leaderboard`, `reroll`, `levelup`, and `arena` (routes `!duel` / `!accept` / `!decline` / `!attack` / `!defend` / `!flee`). Map any command prefix to one of these actions:
 
 ```json
 {
@@ -134,6 +136,17 @@ Edit `config/commands.json`. Currently supported actions are `join`, `leave`, `i
   "!shoot":   "target"
 }
 ```
+
+The optional `_usage_hints` map adds per-item usage hints to `!inventory` output (matched by item-name substring):
+
+```json
+"_usage_hints": {
+  "potion": "!target <ally> to heal",
+  "fireball": "!target <enemy>"
+}
+```
+
+All bot reply text lives in `config/responses.json` with `{user}` / `{target}` / `{item}` / `{damage}` / `{count}`-style placeholders, so flavor text is fully customizable per campaign.
 
 ---
 
@@ -171,21 +184,57 @@ docker run --env-file .env chat-bridge
 
 ## Chat Commands Reference
 
+### Game commands
+
 | Command | Description |
 |---|---|
-| `!join` | Register as a chat participant. Idempotent. |
+| `!join` | Register as a chat participant. Idempotent; returning chatters get a welcome-back with their stats. |
 | `!leave` | Leave the session roster. |
-| `!inventory` | See your current items (bot replies with @mention). |
-| `!target <name>` | Use your first available item on a token matching `<name>`. |
+| `!inventory` / `!inv` | See your current items with quantities and usage hints. |
+| `!target <name>` / `!use <name>` | Use your first available item on a map token matching `<name>` (fuzzy, case-insensitive). Executes real game rolls — damage/heal results come back to chat. |
+| `!name <character name>` | Set your character name (sanitized, unique per channel). |
+| `!me` | Your character summary: name, class, level, XP, gold, gear, lifetime stats, arena W/L. |
+| `!vote <number>` | Vote in the DM's active poll (no `!join` required; re-voting changes your vote). |
+| `!help` | List available commands. |
+
+### Arena commands (isolated PvP sandbox — never touches the campaign)
+
+| Command | Description |
+|---|---|
+| `!duel <name> [gold]` | Challenge another chatter (60s expiry), optionally wagering arena gold. |
+| `!accept` / `!decline` | Respond to a pending challenge. |
+| `!attack` / `!defend` / `!flee` | Interactive-mode turn actions (when `interactive_mode` is enabled). |
+| `!bag` | Full arena inventory with each item's stat bonuses. |
+| `!equip <item>` | Equip gear (one item each in weapon / armor / trinket slots). |
+| `!shop` | Rotating daily shop stock with prices. |
+| `!buy <number or name>` | Buy with arena gold. |
+| `!leaderboard` | Top arena fighters. |
+| `!reroll` | Reroll your class and stats (policy configurable: free once / gold purchase / off). |
+| `!levelup <stat>` | Spend a pending level-up stat point (auto-assigns to class priorities after 60s). |
+
+On first join every chatter is assigned a random SRD class and rolls 4d6-drop-lowest ability scores (announced in chat). Duels use real derived stats — 5e modifiers, class hit die HP, DEX-based AC, crits on natural 20 — and award XP, gold, and item drops. All economy numbers live in `config/arena-balance.json`.
 
 ---
 
 ## DM Controls
 
-In the game client (DM view), two new WebSocket message types are available:
+The DM connects their own Twitch channel from **campaign settings → Twitch Integration** (OAuth flow; tokens are stored encrypted server-side and auto-refreshed). The same panel has:
 
-- **`dm_chat_bridge_kill_switch`** `{ "paused": true/false }` — pause or resume all chat bridge interactions instantly.
-- **`dm_grant_chat_participant_item`** `{ "twitch_username": "...", "item_entry": { "name": "...", ... } }` — grant an item directly to a chat participant.
+- **Chat bridge enabled** toggle — the kill switch; pauses all chat interactions instantly (enforced server-side).
+- **Persist between sessions** — everything / stats only / nothing.
+- **Chat characters** — view, rename, or reset any chat character.
+- **OBS Overlays** — copyable URLs with regenerate buttons (see below).
+
+WebSocket message types available to DM tooling: `dm_chat_bridge_kill_switch` (also accepts `arena_enabled` / `arena_quiet`), `dm_grant_chat_participant_item` (an optional `power_id` on the item picks which viewer power it executes as), `dm_chat_participants_get`, `dm_chat_participant_update`, `dm_chat_participant_reset`, `dm_chat_persistence_mode`.
+
+---
+
+## OBS Setup
+
+1. In campaign settings → **OBS Overlays**, copy an overlay URL (each contains a secret key — click **Regen** if it ever leaks on stream).
+2. In OBS: **Sources → + → Browser**, paste the URL.
+3. Set the size — Game Overlay: **1920×1080**; Arena Panel: **520×300** (position it wherever you like).
+4. Done. Overlays render on a transparent background, show nothing while idle, and auto-reconnect if the connection drops. They are read-only: overlay pages cannot send commands to the game server.
 
 ---
 
@@ -204,4 +253,4 @@ In the game client (DM view), two new WebSocket message types are available:
 npm test
 ```
 
-Tests cover the command parser (all commands, rate limiting, sanitization) and the loot roller (distribution, edge cases).
+Tests cover the command parser (all commands, rate limiting, sanitization), the loot roller (distribution, tiers, edge cases), vote tallying, arena duel resolution and wagers, arena progression (classes, stat math, XP/gold/drops, shop), and arena isolation — asserting a full duel lifecycle only ever sends arena-scoped message types to the game server, never campaign-mutating ones.

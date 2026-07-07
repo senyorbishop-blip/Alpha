@@ -14,6 +14,7 @@ const { LootRoller }    = require('./lootRoller');
 const { EventSubClient } = require('./eventSubClient');
 const { sanitize, validateUsername } = require('./sanitizer');
 const { Arena }         = require('./arena');
+const { CharacterManager } = require('./arenaProgression');
 
 // ---------------------------------------------------------------------------
 // Logger
@@ -41,6 +42,7 @@ const commandMap = loadJson('config/commands.json')  ?? { '!join': 'join', '!lea
 const lootTables = loadJson('config/loot-tables.json') ?? {};
 const cooldowns  = loadJson('config/cooldowns.json')   ?? {};
 const responses  = loadJson('config/responses.json')   ?? {};
+const arenaBalance = loadJson('config/arena-balance.json') ?? {};
 
 // ---------------------------------------------------------------------------
 // Env validation
@@ -120,6 +122,13 @@ const rateLimiter = new RateLimiter({
     vote:      cooldowns.vote_seconds      ?? 2,
     name:      cooldowns.name_seconds      ?? 10,
     me:        cooldowns.me_seconds        ?? 10,
+    shop:      cooldowns.shop_seconds      ?? 10,
+    bag:       cooldowns.bag_seconds       ?? 10,
+    buy:       cooldowns.buy_seconds       ?? 5,
+    equip:     cooldowns.equip_seconds     ?? 5,
+    leaderboard: cooldowns.leaderboard_seconds ?? 30,
+    reroll:    cooldowns.reroll_seconds    ?? 10,
+    levelup:   cooldowns.levelup_seconds   ?? 5,
     ...(cooldowns.commands ?? {}),
   },
   default_seconds:       cooldowns.default_seconds       ?? 5,
@@ -173,6 +182,7 @@ let twitchClient = null;
 let commandParser = null;
 let eventSubClient = null;
 let arena = null;
+let characterManager = null;
 
 async function main() {
   logger.info('[ChatBridge] Starting Twitch Chat Bridge…');
@@ -226,13 +236,40 @@ async function main() {
 
   const channel = `#${twitchChannel.replace(/^#/, '')}`;
 
+  // Arena character progression — cache in memory, load/sync via the
+  // arena-only server message types.
+  characterManager = new CharacterManager({
+    balance: arenaBalance,
+    logger,
+    loadCharacter: async (username) => {
+      const result = await gameClient.send('chat_participant_arena_load', {
+        twitch_username: username,
+      });
+      return result?.found ? result.arena_character : null;
+    },
+    syncCharacter: async (username, displayName, arenaCharacter) => {
+      await gameClient.send('chat_participant_arena_sync', {
+        twitch_username: username,
+        display_name: displayName,
+        arena_character: arenaCharacter,
+      });
+    },
+    announce: (msg) => twitchClient.say(channel, msg),
+  });
+
   arena = new Arena({
     twitchClient,
     config: {
       duel_cooldown_seconds: cooldowns.duel_cooldown_seconds ?? 120,
-      interactiveMode: false,
+      interactiveMode: arenaBalance.duel?.interactive_mode ?? false,
+      wagers_enabled: arenaBalance.duel?.wagers_enabled ?? false,
+      max_wager: arenaBalance.duel?.max_wager ?? 100,
+      message_interval_ms: arenaBalance.duel?.message_interval_ms ?? 5000,
     },
     logger,
+    responses,
+    characterManager,
+    onCharacterSync: (username, displayName) => characterManager.sync(username, displayName),
     onStatsUpdate: async (username, stats) => {
       await gameClient.send('chat_participant_arena_stats_update', {
         twitch_username: username,
@@ -252,8 +289,15 @@ async function main() {
     rateLimiter,
     gameClient,
     twitchClient,
+    characterManager,
     arenaHandler: (ch, username, displayName, action, args) => {
       arena.handleCommand(ch, username, displayName, action, args);
+    },
+    onJoined: async (ch, username, displayName) => {
+      const { character, created } = await characterManager.getOrCreate(username, displayName);
+      if (created) {
+        twitchClient.say(ch, characterManager.creationAnnouncement(character, displayName));
+      }
     },
   });
 
@@ -261,6 +305,7 @@ async function main() {
 
   // Listen for poll events and announce them in chat
   gameClient.on('poll_created', (payload) => {
+    if (commandParser) commandParser.resetVoteWarnings();
     if (!twitchClient || !twitchChannel) return;
     const ch = `#${twitchChannel.replace(/^#/, '')}`;
     const question = payload.question || 'Vote!';
@@ -361,6 +406,7 @@ function shutdown() {
   logger.info('[ChatBridge] Shutting down…');
   if (twitchClient) twitchClient.disconnect();
   if (arena) arena.destroy();
+  if (characterManager) characterManager.destroy();
   gameClient.stop();
   if (eventSubClient) eventSubClient.stop();
   process.exit(0);
