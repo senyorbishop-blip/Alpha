@@ -16,6 +16,7 @@ FT_PER_GRID: float = 5.0
 ROLE_DM: str = "dm"
 ROLE_PLAYER: str = "player"
 ROLE_VIEWER: str = "viewer"
+ROLE_CHAT_BRIDGE: str = "chat_bridge"
 ROLES_ALL: frozenset[str] = frozenset({ROLE_DM, ROLE_PLAYER, ROLE_VIEWER})
 ROLES_ACTIVE: frozenset[str] = frozenset({ROLE_DM, ROLE_PLAYER})
 

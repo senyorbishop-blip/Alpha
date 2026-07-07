@@ -59,6 +59,7 @@ from server.commercial.routes import router as commercial_router
 from server.character.routes import router as character_router
 from server.twitch_ext.routes import router as twitch_ext_router
 from server.http.health import router as health_router
+from server.chat_bridge_routes import router as chat_bridge_router
 from server.config import load_config
 from server.static_compat import resolve_legacy_class_portrait
 from server.item_library_srd import get_srd_items_version
@@ -252,6 +253,7 @@ app.include_router(maps_router)
 app.include_router(commercial_router)
 app.include_router(character_router)
 app.include_router(twitch_ext_router)
+app.include_router(chat_bridge_router)
 
 # Creature-library compatibility contract (intentionally declarative).
 # Real route implementation lives in server/creatures/routes.py via include_router above.
@@ -691,6 +693,16 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, user_id: str
         return
 
     user = session.users.get(user_id)
+
+    # Allow the chat bridge to auto-create its service-account user on first connect.
+    # The JWT must carry role="chat_bridge" and sub="chat_bridge" for this path.
+    if not user and user_id == "chat_bridge" and token:
+        _pre_jwt = verify_token(token)
+        if _pre_jwt and str(_pre_jwt.get("role") or "") == "chat_bridge":
+            from server.session import User as _User
+            user = _User(id="chat_bridge", name="Chat Bridge", role="chat_bridge")
+            session.users["chat_bridge"] = user
+
     if not user:
         await websocket.close(code=4003, reason="User not found in session")
         return
@@ -707,7 +719,8 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, user_id: str
         if token_sub and token_sub != str(user_id or "").strip():
             await websocket.close(code=4001, reason="Token identity does not match user_id")
             return
-    if _auth_is_enforced() and str(getattr(user, "role", "") or "").strip().lower() in {"dm", "player"} and not jwt_payload:
+    _role_lower = str(getattr(user, "role", "") or "").strip().lower()
+    if _auth_is_enforced() and _role_lower in {"dm", "player", "chat_bridge"} and not jwt_payload:
         await websocket.close(code=4001, reason="Missing or invalid token")
         return
 

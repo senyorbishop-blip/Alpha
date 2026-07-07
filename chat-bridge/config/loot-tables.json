@@ -1,0 +1,44 @@
+{
+  "_comment": "Weighted loot tables for Twitch events. Higher weight = more likely. Weights are relative (they don't need to sum to 100).",
+
+  "sub": [
+    { "item": "Potion of Healing",       "weight": 50 },
+    { "item": "Scroll of Magic Missile", "weight": 25 },
+    { "item": "Thieves' Tools",          "weight": 15 },
+    { "item": "Bag of Tricks",           "weight": 8  },
+    { "item": "Wand of Fireballs",       "weight": 2  }
+  ],
+
+  "raid": [
+    { "item": "Raider's War Banner",     "weight": 60 },
+    { "item": "Horn of Blasting",        "weight": 30 },
+    { "item": "Potion of Giant Strength","weight": 10 }
+  ],
+
+  "bits": [
+    {
+      "threshold": 1000,
+      "table": [
+        { "item": "Legendary Artifact Fragment", "weight": 40 },
+        { "item": "Staff of Power (1 charge)",   "weight": 35 },
+        { "item": "Dragon Scale Shield",         "weight": 25 }
+      ]
+    },
+    {
+      "threshold": 500,
+      "table": [
+        { "item": "Potion of Superior Healing",  "weight": 50 },
+        { "item": "Necklace of Fireballs",       "weight": 30 },
+        { "item": "Cloak of Elvenkind",          "weight": 20 }
+      ]
+    },
+    {
+      "threshold": 100,
+      "table": [
+        { "item": "Potion of Healing",           "weight": 60 },
+        { "item": "Caltrops (bag)",              "weight": 25 },
+        { "item": "Smoke Bomb",                  "weight": 15 }
+      ]
+    }
+  ]
+}

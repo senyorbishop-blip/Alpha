@@ -1,0 +1,9 @@
+{
+  "_comment": "Map Twitch chat commands to bridge actions. Add campaign-specific commands below.",
+  "!join":      "join",
+  "!leave":     "leave",
+  "!inventory": "inventory",
+  "!inv":       "inventory",
+  "!target":    "target",
+  "!use":       "target"
+}

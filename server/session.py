@@ -548,9 +548,19 @@ class User:
 
     def __post_init__(self):
         normalized = str(self.role or "viewer").strip().lower() or "viewer"
-        if normalized not in {"dm", "assistant_dm", "player", "viewer"}:
+        if normalized not in {"dm", "assistant_dm", "player", "viewer", "chat_bridge"}:
             normalized = "viewer"
         self.role = normalized
+
+
+@dataclass
+class ChatParticipant:
+    """A Twitch viewer registered as an in-session chat participant."""
+    twitch_username: str   # lowercase — primary key
+    display_name: str      # original capitalisation from Twitch
+    joined_at: float
+    inventory: list = field(default_factory=list)  # list of item dicts
+    is_active: bool = True
 
 
 @dataclass
@@ -628,6 +638,10 @@ class Session:
     enc_str_overrides: dict = field(default_factory=dict)
     corpse_states: dict = field(default_factory=dict)
     corpse_dm_config: dict = field(default_factory=dict)
+    # Chat bridge: runtime-only (not persisted to DB by default).
+    # chat_participants keyed by lowercase Twitch username.
+    chat_participants: dict = field(default_factory=dict)
+    chat_bridge_paused: bool = False
     # _encumbrance_cache is set dynamically; keyed by user_id → {state, speed_penalty}
     # Not declared here so it doesn't show up in persistence serialisation.
 
