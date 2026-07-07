@@ -13,6 +13,7 @@ const { RateLimiter }   = require('./rateLimiter');
 const { LootRoller }    = require('./lootRoller');
 const { EventSubClient } = require('./eventSubClient');
 const { sanitize, validateUsername } = require('./sanitizer');
+const { Arena }         = require('./arena');
 
 // ---------------------------------------------------------------------------
 // Logger
@@ -116,6 +117,9 @@ const rateLimiter = new RateLimiter({
     inventory: cooldowns.inventory_seconds ?? 10,
     target:    cooldowns.target_seconds    ?? 30,
     help:      cooldowns.help_seconds      ?? 5,
+    vote:      cooldowns.vote_seconds      ?? 2,
+    name:      cooldowns.name_seconds      ?? 10,
+    me:        cooldowns.me_seconds        ?? 10,
     ...(cooldowns.commands ?? {}),
   },
   default_seconds:       cooldowns.default_seconds       ?? 5,
@@ -168,6 +172,7 @@ async function grantLoot(username, displayName, tableName, trigger, announcement
 let twitchClient = null;
 let commandParser = null;
 let eventSubClient = null;
+let arena = null;
 
 async function main() {
   logger.info('[ChatBridge] Starting Twitch Chat Bridge…');
@@ -216,19 +221,75 @@ async function main() {
     logger,
   });
 
+  await twitchClient.connect();
+  logger.info('[ChatBridge] Twitch IRC client connected');
+
+  const channel = `#${twitchChannel.replace(/^#/, '')}`;
+
+  arena = new Arena({
+    twitchClient,
+    config: {
+      duel_cooldown_seconds: cooldowns.duel_cooldown_seconds ?? 120,
+      interactiveMode: false,
+    },
+    logger,
+    onStatsUpdate: async (username, stats) => {
+      await gameClient.send('chat_participant_arena_stats_update', {
+        twitch_username: username,
+        arena_stats: stats,
+      });
+    },
+    onDisplayEvent: (payload) => {
+      gameClient.send('arena_display_event', payload).catch(err =>
+        logger.error('[Arena] display event relay error:', err)
+      );
+    },
+  });
+
   commandParser = new CommandParser({
     commandMap,
     responses,
     rateLimiter,
     gameClient,
     twitchClient,
+    arenaHandler: (ch, username, displayName, action, args) => {
+      arena.handleCommand(ch, username, displayName, action, args);
+    },
   });
 
-  twitchClient.onMessage((channel, tags, message) => commandParser.handle(channel, tags, message));
-  await twitchClient.connect();
-  logger.info('[ChatBridge] Twitch IRC client connected');
+  twitchClient.onMessage((ch, tags, message) => commandParser.handle(ch, tags, message));
 
-  const channel = `#${twitchChannel.replace(/^#/, '')}`;
+  // Listen for poll events and announce them in chat
+  gameClient.on('poll_created', (payload) => {
+    if (!twitchClient || !twitchChannel) return;
+    const ch = `#${twitchChannel.replace(/^#/, '')}`;
+    const question = payload.question || 'Vote!';
+    const options = (payload.options || []).map((opt, i) => `!vote ${i + 1} (${opt})`).join(' or ');
+    const closesAt = payload.closes_at;
+    const duration = closesAt ? `${Math.round(closesAt - Date.now() / 1000)}s remaining` : '';
+    const suffix = duration ? ` — ${duration}` : '';
+    twitchClient.say(ch, `VOTE: ${question} — ${options}${suffix}`);
+  });
+
+  gameClient.on('poll_closed', (payload) => {
+    if (!twitchClient || !twitchChannel) return;
+    const ch = `#${twitchChannel.replace(/^#/, '')}`;
+    // Find winner from vote_counts
+    const counts = payload.vote_counts || {};
+    const options = payload.options || [];
+    let winnerIdx = -1;
+    let winnerCount = 0;
+    let total = 0;
+    for (const [idx, count] of Object.entries(counts)) {
+      total += count;
+      if (count > winnerCount) { winnerCount = count; winnerIdx = parseInt(idx, 10); }
+    }
+    if (winnerIdx >= 0 && options[winnerIdx]) {
+      twitchClient.say(ch, `Vote closed! Result: "${options[winnerIdx]}" won with ${winnerCount} vote(s) out of ${total} total.`);
+    } else {
+      twitchClient.say(ch, `Vote closed! No votes were cast.`);
+    }
+  });
 
   // ---------------------------------------------------------------------------
   // EventSub (optional — requires clientId and broadcasterId)
@@ -284,11 +345,12 @@ async function main() {
   }
 
   // Handle server-side kill-switch events
-  gameClient.on('chat_bridge_status', ({ paused }) => {
+  gameClient.on('chat_bridge_status', ({ paused, arena_enabled }) => {
     logger.info(`[ChatBridge] Kill switch: bridge is now ${paused ? 'PAUSED' : 'ACTIVE'}`);
     if (paused && twitchClient) {
       twitchClient.say(channel, 'Chat bridge is temporarily paused by the DM. Hang tight!');
     }
+    if (arena_enabled !== undefined) arena.setEnabled(arena_enabled);
   });
 
   process.on('SIGTERM', shutdown);
@@ -298,6 +360,7 @@ async function main() {
 function shutdown() {
   logger.info('[ChatBridge] Shutting down…');
   if (twitchClient) twitchClient.disconnect();
+  if (arena) arena.destroy();
   gameClient.stop();
   if (eventSubClient) eventSubClient.stop();
   process.exit(0);

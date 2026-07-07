@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Tavern Tabletop — Arena Overlay</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: transparent;
+      overflow: hidden;
+      font-family: 'Georgia', 'Times New Roman', serif;
+      width: 100vw;
+      height: 100vh;
+    }
+
+    /* ── Arena panel (centered lower-third style) ─────────────── */
+    #arena-panel {
+      position: fixed;
+      bottom: 60px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 520px;
+      background: rgba(10, 8, 5, 0.85);
+      border: 1px solid rgba(201,168,76,0.5);
+      border-radius: 12px;
+      padding: 16px 20px;
+      backdrop-filter: blur(6px);
+      box-shadow: 0 6px 28px rgba(0,0,0,0.65);
+      display: none;
+      color: #f0e6c8;
+    }
+    #arena-panel.visible {
+      display: block;
+      animation: panel-in 0.4s ease;
+    }
+    #arena-panel.fade-out {
+      animation: panel-out 0.5s ease forwards;
+    }
+
+    @keyframes panel-in {
+      from { opacity: 0; transform: translateX(-50%) translateY(20px); }
+      to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+    }
+    @keyframes panel-out {
+      from { opacity: 1; }
+      to   { opacity: 0; }
+    }
+
+    #arena-header {
+      font-size: 11px;
+      color: #c9a84c;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      text-align: center;
+      margin-bottom: 12px;
+    }
+
+    /* ── Combatant rows ─────────────────────────────────────────── */
+    #combatants {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .combatant {
+      flex: 1;
+      min-width: 0;
+    }
+    .combatant-name {
+      font-size: 14px;
+      font-weight: bold;
+      margin-bottom: 5px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .hp-bar-bg {
+      height: 12px;
+      background: rgba(255,255,255,0.1);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    .hp-bar-fill {
+      height: 100%;
+      border-radius: 6px;
+      transition: width 0.5s ease, background-color 0.5s ease;
+    }
+    .combatant-left  .hp-bar-fill { background: linear-gradient(90deg, #4a9eff, #7bc8ff); }
+    .combatant-right .hp-bar-fill { background: linear-gradient(90deg, #ff6b6b, #ffaa70); }
+    .hp-text {
+      font-size: 11px;
+      color: rgba(240,230,200,0.6);
+      margin-top: 3px;
+      text-align: right;
+    }
+
+    #vs-label {
+      font-size: 18px;
+      font-weight: bold;
+      color: #c9a84c;
+      flex-shrink: 0;
+      text-align: center;
+    }
+
+    /* ── Round log ──────────────────────────────────────────────── */
+    #round-log {
+      margin-top: 12px;
+      font-size: 12px;
+      color: rgba(240,230,200,0.75);
+      text-align: center;
+      min-height: 18px;
+      line-height: 1.4;
+    }
+
+    /* ── Winner announcement ────────────────────────────────────── */
+    #winner-banner {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(10, 8, 5, 0.9);
+      border: 2px solid #c9a84c;
+      border-radius: 14px;
+      padding: 24px 48px;
+      text-align: center;
+      color: #f0e6c8;
+      display: none;
+      pointer-events: none;
+      box-shadow: 0 8px 36px rgba(0,0,0,0.75);
+    }
+    #winner-banner.visible {
+      display: block;
+      animation: pop-in 0.4s ease;
+    }
+    #winner-banner .label  { font-size: 13px; color: #c9a84c; margin-bottom: 8px; letter-spacing: 1px; text-transform: uppercase; }
+    #winner-banner .winner { font-size: 26px; font-weight: bold; }
+
+    @keyframes pop-in {
+      from { opacity: 0; transform: translate(-50%,-50%) scale(0.75); }
+      to   { opacity: 1; transform: translate(-50%,-50%) scale(1); }
+    }
+
+    /* ── Connection dot ─────────────────────────────────────────── */
+    #conn-dot {
+      position: fixed;
+      top: 10px;
+      left: 10px;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #e07070;
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+    #conn-dot.disconnected { opacity: 0.7; }
+  </style>
+</head>
+<body>
+
+<div id="conn-dot"></div>
+
+<div id="arena-panel">
+  <div id="arena-header">⚔ Arena Duel ⚔</div>
+  <div id="combatants">
+    <div class="combatant combatant-left">
+      <div class="combatant-name" id="challenger-name">Challenger</div>
+      <div class="hp-bar-bg">
+        <div class="hp-bar-fill" id="challenger-bar" style="width:100%"></div>
+      </div>
+      <div class="hp-text" id="challenger-hp-text">— HP</div>
+    </div>
+    <div id="vs-label">VS</div>
+    <div class="combatant combatant-right">
+      <div class="combatant-name" id="opponent-name">Opponent</div>
+      <div class="hp-bar-bg">
+        <div class="hp-bar-fill" id="opponent-bar" style="width:100%"></div>
+      </div>
+      <div class="hp-text" id="opponent-hp-text">— HP</div>
+    </div>
+  </div>
+  <div id="round-log"></div>
+</div>
+
+<div id="winner-banner">
+  <div class="label">Winner</div>
+  <div class="winner" id="winner-name"></div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var SESSION_ID  = {{ session_id | tojson }};
+  var WS_TOKEN    = {{ overlay_jwt | tojson }};
+  var WS_BASE_URL = {{ ws_url | tojson }};
+
+  var ws = null;
+  var reconnectDelay = 1000;
+  var maxDelay = 30000;
+  var hideTimer = null;
+
+  // ── Connection ─────────────────────────────────────────────────────────────
+
+  function connect() {
+    var url = WS_BASE_URL + '/ws/' + SESSION_ID + '/overlay_arena?token=' + encodeURIComponent(WS_TOKEN);
+    ws = new WebSocket(url);
+
+    ws.onopen = function () {
+      reconnectDelay = 1000;
+      document.getElementById('conn-dot').classList.remove('disconnected');
+    };
+
+    ws.onclose = function () {
+      document.getElementById('conn-dot').classList.add('disconnected');
+      setTimeout(connect, reconnectDelay);
+      reconnectDelay = Math.min(reconnectDelay * 2, maxDelay);
+    };
+
+    ws.onerror = function () { ws.close(); };
+
+    ws.onmessage = function (evt) {
+      try {
+        var msg = JSON.parse(evt.data);
+        handleMessage(msg);
+      } catch (_) {}
+    };
+  }
+
+  // ── Heartbeat ──────────────────────────────────────────────────────────────
+
+  setInterval(function () {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'pong' }));
+    }
+  }, 20000);
+
+  // ── Event handler ──────────────────────────────────────────────────────────
+
+  function handleMessage(msg) {
+    var t = msg.type;
+    var p = msg.payload || {};
+
+    if (t === 'ping') {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'pong' }));
+      }
+      return;
+    }
+
+    if (t === 'arena_display_event') {
+      handleArenaEvent(p);
+      return;
+    }
+  }
+
+  function handleArenaEvent(p) {
+    var ev = p.event_type || '';
+
+    if (ev === 'duel_start') {
+      showPanel();
+      setNames(p.challenger, p.opponent);
+      setHP('challenger', p.challenger_hp, p.challenger_max_hp);
+      setHP('opponent',   p.opponent_hp,   p.opponent_max_hp);
+      setLog('Round 1 — Fight!');
+      cancelHide();
+      return;
+    }
+
+    if (ev === 'round') {
+      showPanel();
+      setHP('challenger', p.challenger_hp, p.challenger_max_hp);
+      setHP('opponent',   p.opponent_hp,   p.opponent_max_hp);
+      var roundNum = p.round || '?';
+      var msg = p.message || ('Round ' + roundNum);
+      setLog(esc(msg));
+      cancelHide();
+      return;
+    }
+
+    if (ev === 'duel_end') {
+      var winner = p.winner || '';
+      if (winner) {
+        setLog(esc(winner) + ' wins the duel!');
+        showWinner(winner);
+      }
+      scheduleHide(8000);
+      return;
+    }
+  }
+
+  // ── Panel helpers ──────────────────────────────────────────────────────────
+
+  function showPanel() {
+    var panel = document.getElementById('arena-panel');
+    panel.classList.remove('fade-out');
+    panel.classList.add('visible');
+  }
+
+  function hidePanel() {
+    var panel = document.getElementById('arena-panel');
+    panel.classList.add('fade-out');
+    setTimeout(function () {
+      panel.classList.remove('visible', 'fade-out');
+    }, 500);
+  }
+
+  function scheduleHide(ms) {
+    cancelHide();
+    hideTimer = setTimeout(hidePanel, ms || 6000);
+  }
+
+  function cancelHide() {
+    if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
+  }
+
+  function setNames(challenger, opponent) {
+    document.getElementById('challenger-name').textContent = challenger || 'Challenger';
+    document.getElementById('opponent-name').textContent   = opponent   || 'Opponent';
+  }
+
+  function setHP(who, hp, maxHp) {
+    hp    = parseInt(hp || 0, 10);
+    maxHp = parseInt(maxHp || 1, 10);
+    if (maxHp <= 0) maxHp = 1;
+    var pct = Math.max(0, Math.min(100, Math.round((hp / maxHp) * 100)));
+    document.getElementById(who + '-bar').style.width = pct + '%';
+    document.getElementById(who + '-hp-text').textContent = hp + ' / ' + maxHp + ' HP';
+  }
+
+  function setLog(html) {
+    document.getElementById('round-log').innerHTML = html;
+  }
+
+  function showWinner(winner) {
+    document.getElementById('winner-name').textContent = winner;
+    var banner = document.getElementById('winner-banner');
+    banner.classList.add('visible');
+    setTimeout(function () {
+      banner.classList.remove('visible');
+    }, 5000);
+  }
+
+  function esc(s) {
+    return String(s || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  connect();
+})();
+</script>
+</body>
+</html>

@@ -61,6 +61,7 @@ from server.twitch_ext.routes import router as twitch_ext_router
 from server.http.health import router as health_router
 from server.chat_bridge_routes import router as chat_bridge_router
 from server.twitch_oauth_routes import router as twitch_oauth_router
+from server.overlay_routes import router as overlay_router
 from server.config import load_config
 from server.static_compat import resolve_legacy_class_portrait
 from server.item_library_srd import get_srd_items_version
@@ -256,6 +257,7 @@ app.include_router(character_router)
 app.include_router(twitch_ext_router)
 app.include_router(chat_bridge_router)
 app.include_router(twitch_oauth_router)
+app.include_router(overlay_router)
 
 # Creature-library compatibility contract (intentionally declarative).
 # Real route implementation lives in server/creatures/routes.py via include_router above.
@@ -704,6 +706,15 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, user_id: str
             from server.session import User as _User
             user = _User(id="chat_bridge", name="Chat Bridge", role="chat_bridge")
             session.users["chat_bridge"] = user
+
+    # Allow overlay clients to auto-create their ephemeral read-only user on connect.
+    # user_id must be "overlay_game" or "overlay_arena"; JWT must carry role="overlay".
+    if not user and user_id in ("overlay_game", "overlay_arena") and token:
+        _pre_jwt = verify_token(token)
+        if _pre_jwt and str(_pre_jwt.get("role") or "") == "overlay":
+            from server.session import User as _User
+            user = _User(id=user_id, name="Overlay", role="overlay")
+            session.users[user_id] = user
 
     if not user:
         await websocket.close(code=4003, reason="User not found in session")

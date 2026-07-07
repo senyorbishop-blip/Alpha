@@ -20,6 +20,19 @@ const DEFAULT_RESPONSES = {
   inventory_cooldown: '{user}, please wait {seconds}s before checking inventory again.',
   help_header:        'Available commands: {commands}',
   bridge_paused:      '{user}, chat interactions are paused by the DM. Hang tight!',
+  vote_registered:    '@{user} Your vote for option {number} ({option}) has been recorded!',
+  vote_changed:       '@{user} Changed your vote to option {number} ({option}).',
+  vote_invalid:       '@{user} Invalid option. Type !vote 1 through !vote {max}.',
+  vote_no_poll:       "@{user} There's no active vote right now.",
+  vote_cooldown:      '@{user} Wait {seconds}s before voting again.',
+  name_set:           '@{user} You are now known as {name}!',
+  name_taken:         '@{user} That name is already taken. Choose another.',
+  name_invalid:       "@{user} Name must use letters, numbers, spaces, hyphens, or apostrophes (max 32 chars).",
+  name_not_joined:    '@{user} Type !join first.',
+  name_cooldown:      '@{user} Wait {seconds}s before changing your name again.',
+  me_summary:         '@{user} — {charName} | Items: {items} | Sessions: {sessions} | Damage dealt: {damage} | Arena: {wins}W/{losses}L',
+  me_not_joined:      '@{user} Type !join first to enter the game.',
+  me_cooldown:        '@{user} Wait {seconds}s.',
 };
 
 /**
@@ -31,12 +44,13 @@ const DEFAULT_RESPONSES = {
  * Response templates are loaded from config/responses.json.
  */
 class CommandParser {
-  constructor({ commandMap, responses, rateLimiter, gameClient, twitchClient }) {
+  constructor({ commandMap, responses, rateLimiter, gameClient, twitchClient, arenaHandler }) {
     this._commandMap = commandMap;
     this._responses = { ...DEFAULT_RESPONSES, ...(responses ?? {}) };
     this._rate = rateLimiter;
     this._game = gameClient;
     this._twitch = twitchClient;
+    this._arenaHandler = arenaHandler || null;
   }
 
   // ---------------------------------------------------------------------------
@@ -70,13 +84,23 @@ class CommandParser {
     if (!username) return;
 
     const displayName = sanitize(String(tags['display-name'] ?? tags.username ?? username), 32);
+    const userId = tags['user-id'] ?? '';
 
     switch (action) {
-      case 'join':      await this._handleJoin(channel, username, displayName); break;
-      case 'leave':     await this._handleLeave(channel, username, displayName); break;
-      case 'inventory': await this._handleInventory(channel, username, displayName); break;
-      case 'target':    await this._handleTarget(channel, username, displayName, args); break;
+      case 'join':      await this._handleJoin(channel, userId, username, displayName); break;
+      case 'leave':     await this._handleLeave(channel, userId, username, displayName); break;
+      case 'inventory': await this._handleInventory(channel, userId, username, displayName); break;
+      case 'target':    await this._handleTarget(channel, userId, username, displayName, args); break;
       case 'help':      this._handleHelp(channel, username); break;
+      case 'vote':      await this._handleVote(channel, username, displayName, args); break;
+      case 'name':      await this._handleName(channel, userId, username, displayName, args); break;
+      case 'me':        await this._handleMe(channel, username, displayName); break;
+      case 'arena':
+        if (this._arenaHandler) {
+          const arenaAction = cmdRaw.slice(1); // 'duel', 'accept', 'decline'
+          this._arenaHandler(channel, username, displayName, arenaAction, args);
+        }
+        break;
       default:          break;
     }
   }
@@ -85,7 +109,7 @@ class CommandParser {
   // Handlers
   // ---------------------------------------------------------------------------
 
-  async _handleJoin(channel, username, displayName) {
+  async _handleJoin(channel, userId, username, displayName) {
     if (!this._rate.check(username, 'join')) {
       const rem = this._rate.remaining(username, 'join');
       this._twitch.reply(channel, username, this._t('join_cooldown', { user: displayName, seconds: rem }));
@@ -94,27 +118,35 @@ class CommandParser {
 
     const result = await this._game.send('chat_participant_join', {
       twitch_username: username,
+      twitch_user_id: userId,
       display_name: displayName,
     });
 
     if (result?.already_joined) {
       this._twitch.reply(channel, username, this._t('join_already', { user: displayName }));
+    } else if (result?.returning && (result?.sessions_joined || 0) > 1) {
+      const charName = result.character_name || displayName;
+      const stats = result.lifetime_stats || {};
+      const sess = result.sessions_joined;
+      const dmg = stats.damage_dealt > 0 ? `, ${stats.damage_dealt} damage dealt` : '';
+      this._twitch.say(channel, `Welcome back, ${charName}! (${sess} sessions${dmg}).`);
     } else {
       this._twitch.say(channel, this._t('join_success', { user: displayName }));
     }
   }
 
-  async _handleLeave(channel, username, displayName) {
+  async _handleLeave(channel, userId, username, displayName) {
     if (!this._rate.check(username, 'leave')) return;
 
     await this._game.send('chat_participant_leave', {
       twitch_username: username,
+      twitch_user_id: userId,
       display_name: displayName,
     });
     this._twitch.reply(channel, username, this._t('leave_success', { user: displayName }));
   }
 
-  async _handleInventory(channel, username, displayName) {
+  async _handleInventory(channel, userId, username, displayName) {
     if (!this._rate.check(username, 'inventory')) {
       const rem = this._rate.remaining(username, 'inventory');
       this._twitch.reply(channel, username, this._t('inventory_cooldown', { user: displayName, seconds: rem }));
@@ -123,6 +155,7 @@ class CommandParser {
 
     const result = await this._game.send('chat_participant_inventory', {
       twitch_username: username,
+      twitch_user_id: userId,
     });
 
     if (!result?.found) {
@@ -146,7 +179,7 @@ class CommandParser {
     }
   }
 
-  async _handleTarget(channel, username, displayName, args) {
+  async _handleTarget(channel, userId, username, displayName, args) {
     if (!this._rate.check(username, 'target')) {
       const rem = this._rate.remaining(username, 'target');
       this._twitch.reply(channel, username, this._t('target_cooldown', { user: displayName, seconds: rem }));
@@ -166,6 +199,7 @@ class CommandParser {
 
     const result = await this._game.send('chat_participant_target', {
       twitch_username: username,
+      twitch_user_id: userId,
       display_name: displayName,
       target_name: targetName,
     });
@@ -189,6 +223,131 @@ class CommandParser {
       .filter(k => !k.startsWith('_'))
       .join(' ');
     this._twitch.reply(channel, username, this._t('help_header', { commands: cmds }));
+  }
+
+  async _handleVote(channel, username, displayName, args) {
+    if (!this._rate.check(username, 'vote')) {
+      const rem = this._rate.remaining(username, 'vote');
+      this._twitch.reply(channel, username, this._t('vote_cooldown', { user: displayName, seconds: rem }));
+      return;
+    }
+
+    const numStr = (args[0] || '').replace(/\D/g, '');
+    const num = parseInt(numStr, 10);
+    if (!numStr || isNaN(num) || num < 1) {
+      this._twitch.reply(channel, username, this._t('vote_invalid', { user: displayName, max: '?' }));
+      return;
+    }
+
+    // Check per-user invalid-option warning state
+    if (!this._voteWarnedUsers) this._voteWarnedUsers = new Map();
+
+    const optionIndex = num - 1;  // convert to 0-indexed
+    const result = await this._game.send('chat_bridge_poll_vote', {
+      twitch_username: username,
+      option_index: optionIndex,
+    });
+
+    if (!result) {
+      // no active poll or timeout
+      return;
+    }
+
+    if (result.success) {
+      this._voteWarnedUsers.delete(username);
+      if (result.changed) {
+        this._twitch.reply(channel, username, this._t('vote_changed', {
+          user: displayName, number: num, option: result.option_label || String(num),
+        }));
+      } else {
+        this._twitch.reply(channel, username, this._t('vote_registered', {
+          user: displayName, number: num, option: result.option_label || String(num),
+        }));
+      }
+    } else {
+      const code = result.error_code;
+      if (code === 'no_active_poll' || code === 'poll_id_mismatch') {
+        this._twitch.reply(channel, username, this._t('vote_no_poll', { user: displayName }));
+      } else if (code === 'invalid_option') {
+        // Only warn once per user per active poll
+        if (!this._voteWarnedUsers.get(username)) {
+          this._voteWarnedUsers.set(username, true);
+          this._twitch.reply(channel, username, this._t('vote_invalid', {
+            user: displayName, max: result.max_valid || '?',
+          }));
+        }
+        // subsequent invalid attempts are silently ignored
+      }
+      // bridge_paused → silently ignore
+    }
+  }
+
+  async _handleName(channel, userId, username, displayName, args) {
+    if (!this._rate.check(username, 'name')) {
+      const rem = this._rate.remaining(username, 'name');
+      this._twitch.reply(channel, username, this._t('name_cooldown', { user: displayName, seconds: rem }));
+      return;
+    }
+
+    const charName = args.join(' ').trim();
+    if (!charName) {
+      this._twitch.reply(channel, username, this._t('name_invalid', { user: displayName }));
+      return;
+    }
+
+    const result = await this._game.send('chat_participant_name_set', {
+      twitch_username: username,
+      twitch_user_id: userId || '',
+      character_name: charName,
+    });
+
+    if (!result) return;
+
+    if (result.success) {
+      this._twitch.reply(channel, username, this._t('name_set', {
+        user: displayName, name: result.character_name || charName,
+      }));
+    } else {
+      const code = result.error_code;
+      if (code === 'name_taken') {
+        this._twitch.reply(channel, username, this._t('name_taken', { user: displayName }));
+      } else if (code === 'not_joined') {
+        this._twitch.reply(channel, username, this._t('name_not_joined', { user: displayName }));
+      } else {
+        this._twitch.reply(channel, username, this._t('name_invalid', { user: displayName }));
+      }
+    }
+  }
+
+  async _handleMe(channel, username, displayName) {
+    if (!this._rate.check(username, 'me')) {
+      const rem = this._rate.remaining(username, 'me');
+      this._twitch.reply(channel, username, this._t('me_cooldown', { user: displayName, seconds: rem }));
+      return;
+    }
+
+    const result = await this._game.send('chat_participant_me', {
+      twitch_username: username,
+    });
+
+    if (!result?.found) {
+      this._twitch.reply(channel, username, this._t('me_not_joined', { user: displayName }));
+      return;
+    }
+
+    const stats = result.lifetime_stats || {};
+    const arena = result.arena_stats || {};
+    const charName = result.character_name || result.display_name || displayName;
+
+    this._twitch.reply(channel, username, this._t('me_summary', {
+      user: displayName,
+      charName,
+      items: result.inventory_count || 0,
+      sessions: stats.sessions_joined || 0,
+      damage: stats.damage_dealt || 0,
+      wins: arena.wins || 0,
+      losses: arena.losses || 0,
+    }));
   }
 
   // ---------------------------------------------------------------------------
