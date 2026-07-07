@@ -11,4 +11,5 @@ bcrypt>=4.0.0
 cffi>=1.15.0
 requests>=2.31.0
 python-dotenv>=1.0.0
+cryptography>=42.0.0
 # elevenlabs SDK removed — narration now uses direct HTTP to the ElevenLabs REST API

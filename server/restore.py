@@ -4,8 +4,9 @@ server/restore.py — Rebuild in-memory Session objects from persisted DB data.
 This module is used when the server restarts or a WS client connects to a session
 that is no longer in the in-memory store.
 """
+import os
 import secrets
-from server.session import _sessions, Session, Token, User, POI, normalize_interactable
+from server.session import _sessions, Session, Token, User, POI, ChatParticipant, normalize_interactable
 from server.map_document import build_map_documents_from_session, hydrate_session_from_map_documents
 from server.persistence_schema import normalize_persisted_campaign_data
 from server.quest_progression import resolve_session_quest_progression
@@ -95,6 +96,29 @@ def _migrate_journal_to_codex(session: Session) -> None:
     session.codex_entries = migrated
 
 
+def _restore_chat_participants(session: Session, data: dict) -> None:
+    """Restore chat_participants from persisted data.
+
+    If CHAT_BRIDGE_PERSIST_PARTICIPANTS=false (the default), participants are
+    restored with is_active=False so they retain their inventory but must
+    !join again.  Set to 'true' to restore them as fully active.
+    """
+    persist = os.environ.get("CHAT_BRIDGE_PERSIST_PARTICIPANTS", "false").strip().lower()
+    keep_active = persist in {"1", "true", "yes"}
+
+    raw_map = data.get("chat_participants") or {}
+    for key, p in raw_map.items():
+        if not isinstance(p, dict):
+            continue
+        session.chat_participants[key] = ChatParticipant(
+            twitch_username=str(p.get("twitch_username") or key),
+            display_name=str(p.get("display_name") or key),
+            joined_at=float(p.get("joined_at") or 0),
+            inventory=list(p.get("inventory") or []),
+            is_active=keep_active and bool(p.get("is_active", True)),
+        )
+
+
 def restore_session_from_db(data: dict):
     """Rebuild a full Session object from persisted DB data.
 
@@ -151,6 +175,8 @@ def restore_session_from_db(data: dict):
     session.world_state = data.get("world_state", {}) or {}
     session.active_poll = data.get("active_poll")
     session.show_viewer_presence = bool(data.get("show_viewer_presence", False))
+
+    _restore_chat_participants(session, data)
 
     map_documents = data.get("map_documents", {}) or {}
     if map_documents:

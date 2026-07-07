@@ -671,6 +671,7 @@ def normalize_persisted_campaign_data(data: dict[str, Any] | None) -> dict[str, 
         "hazard_zones",
         "corpse_states",
         "corpse_dm_config",
+        "chat_participants",
     ):
         normalized[field] = _as_dict(src.get(field))
     # Encumbrance settings (DM-configurable rules)
@@ -689,6 +690,23 @@ def _normalize_encumbrance_settings(raw: Any) -> dict:
         "extradim_conflict_block": bool(src.get("extradim_conflict_block", True)),
     }
 
+
+
+def _serialize_chat_participants(participants: dict) -> dict:
+    """Convert ChatParticipant dataclasses to plain dicts for JSON serialization."""
+    out = {}
+    for key, p in participants.items():
+        if hasattr(p, "__dataclass_fields__"):
+            out[key] = {
+                "twitch_username": p.twitch_username,
+                "display_name": p.display_name,
+                "joined_at": p.joined_at,
+                "inventory": list(p.inventory),
+                "is_active": p.is_active,
+            }
+        elif isinstance(p, dict):
+            out[key] = p
+    return out
 
 
 def extract_persistable_campaign_state(session: Any) -> dict[str, Any]:
@@ -721,6 +739,7 @@ def extract_persistable_campaign_state(session: Any) -> dict[str, Any]:
         "corpse_states": _clone(getattr(session, "corpse_states", None) or {}),
         "corpse_dm_config": _clone(getattr(session, "corpse_dm_config", None) or {}),
         "encumbrance_settings": _clone(getattr(session, "encumbrance_settings", None) or {}),
+        "chat_participants": _serialize_chat_participants(getattr(session, "chat_participants", None) or {}),
         "handouts": _clone(getattr(session, "handouts", None) or []),
         "discovery_cards": _clone(getattr(session, "discovery_cards", None) or []),
         "private_story_hooks": _clone(getattr(session, "private_story_hooks", None) or []),
