@@ -1,0 +1,22 @@
+{
+  "_comment": "Response templates. Placeholders: {user} {target} {item} {count} {seconds} {suggestions} {targetList} {commands}",
+  "join_success":   "{user} has entered the tavern! Type !inventory to see your items.",
+  "join_already":   "You're already in the tavern, {user}!",
+  "join_cooldown":  "Hold on, {user} — you can rejoin in {seconds}s.",
+  "leave_success":  "Farewell, {user}! You've left the tavern.",
+  "target_hit":     "{user} uses {item} on {target}!",
+  "target_no_item": "{user}, you don't have anything to use yet. Subs and cheers earn items!",
+  "target_not_joined": "{user}, type !join first to enter the game.",
+  "target_no_name": "{user}, usage: !target <name>",
+  "target_invalid":  "{user}, invalid target name.",
+  "target_miss":    "{user}: {message}",
+  "target_ambiguous": "{user}, did you mean {suggestions}? Be more specific.",
+  "target_not_found": "{user}, no one called '{target}' here. Valid targets: {targetList}",
+  "target_cooldown": "{user}, catch your breath — try again in {seconds}s.",
+  "inventory_empty": "{user}, your satchel is empty. Keep watching — loot may come!",
+  "inventory_list":  "{user}, your items: {items}",
+  "inventory_not_joined": "{user}, you're not in the tavern yet — type !join first.",
+  "inventory_cooldown": "{user}, please wait {seconds}s before checking inventory again.",
+  "help_header":    "Available commands: {commands}",
+  "bridge_paused":  "{user}, chat interactions are paused by the DM. Hang tight!"
+}

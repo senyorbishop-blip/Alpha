@@ -60,6 +60,7 @@ from server.character.routes import router as character_router
 from server.twitch_ext.routes import router as twitch_ext_router
 from server.http.health import router as health_router
 from server.chat_bridge_routes import router as chat_bridge_router
+from server.twitch_oauth_routes import router as twitch_oauth_router
 from server.config import load_config
 from server.static_compat import resolve_legacy_class_portrait
 from server.item_library_srd import get_srd_items_version
@@ -254,6 +255,7 @@ app.include_router(commercial_router)
 app.include_router(character_router)
 app.include_router(twitch_ext_router)
 app.include_router(chat_bridge_router)
+app.include_router(twitch_oauth_router)
 
 # Creature-library compatibility contract (intentionally declarative).
 # Real route implementation lives in server/creatures/routes.py via include_router above.

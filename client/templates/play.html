@@ -1614,6 +1614,17 @@
         <span class="mf-settings__saved">Settings are saved locally 🔒</span>
       </div>
     </section>
+
+    <!-- Twitch Integration (DM only — shown/populated by twitch_settings.js) -->
+    <section id="twitch-settings-section" hidden
+             style="margin-top:1.1rem;border-top:1px solid rgba(145,70,255,0.25);padding-top:0.9rem;">
+      <h2 class="mf-settings__title" style="color:#9146ff;font-size:0.8rem;margin-bottom:0.55rem;">
+        Twitch Integration
+      </h2>
+      <div id="twitch-settings-body" style="min-height:2rem;">
+        <span style="font-size:0.7rem;color:var(--parchment-dim);">Loading&#8230;</span>
+      </div>
+    </section>
   </div>
 </div>
 
@@ -4090,6 +4101,7 @@ window.__playerBootState = window.__playerBootState || { checkpoint: 'PLAYER_BOO
 <script src="/static/js/ui/sound_engine.js"></script>
 <script src="/static/js/ui/narration.js"></script>
 <script src="/static/js/ui/dm_assistant.js"></script>
+<script src="/static/js/ui/twitch_settings.js"></script>
 <!-- Camp / Rest mode -->
 <script type="module">
   import * as CampRest from '/static/js/ui/camp_rest.js';
