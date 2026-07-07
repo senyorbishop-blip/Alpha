@@ -92,6 +92,9 @@ DM_ADMIN_MESSAGE_TYPES = frozenset({
     "viewer_power_revoke",
     "viewer_power_pending_decision",
     "viewer_presence_toggle",
+    # Chat bridge admin (DM only)
+    "dm_chat_bridge_kill_switch",
+    "dm_grant_chat_participant_item",
     "hazard_zone_create",
     "hazard_zone_update",
     "hazard_zone_delete",
@@ -138,6 +141,16 @@ ASSISTANT_DM_DENIED_MESSAGE_TYPES = frozenset({
     "bring_all_to_map",
     "local_map_enter",
     "local_map_exit",
+})
+
+CHAT_BRIDGE_ALLOWED_MESSAGE_TYPES = frozenset({
+    # Chat-participant lifecycle
+    "chat_participant_join",
+    "chat_participant_leave",
+    # Chat-participant actions (item use / targeting)
+    "chat_participant_target",
+    # Loot grant triggered by Twitch events (sub/bits/raid)
+    "chat_bridge_loot_grant",
 })
 
 PLAYER_KNOWN_GAMEPLAY_MESSAGE_TYPES = frozenset({
@@ -276,4 +289,8 @@ def is_ws_message_allowed_for_role(msg_type: str, role: str | None) -> WsPermiss
         if msg_type in PLAYER_KNOWN_GAMEPLAY_MESSAGE_TYPES:
             return WsPermissionDecision(True)
         return WsPermissionDecision(False, "player_unknown_type", "You don't have permission to do that.")
+    if role == "chat_bridge":
+        if msg_type in CHAT_BRIDGE_ALLOWED_MESSAGE_TYPES:
+            return WsPermissionDecision(True)
+        return WsPermissionDecision(False, "chat_bridge_forbidden", "Chat bridge does not have permission for that action.")
     return WsPermissionDecision(False, "unknown_role", "You don't have permission to do that.")

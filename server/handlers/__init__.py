@@ -241,6 +241,15 @@ from server.handlers.codex import (
     handle_codex_link_set,
     handle_codex_link_query,
 )
+from server.handlers.chat_bridge import (
+    handle_chat_participant_join,
+    handle_chat_participant_leave,
+    handle_chat_participant_target,
+    handle_chat_bridge_loot_grant,
+    handle_chat_participant_inventory,
+    handle_dm_chat_bridge_kill_switch,
+    handle_dm_grant_chat_participant_item,
+)
 from server.handlers.token_placement_secure import handle_token_placed_secure
 from server.handlers.ws_permissions import is_ws_message_allowed_for_role
 from server.handlers.inventory_runtime_bridge import install_inventory_runtime_bridge
@@ -469,6 +478,15 @@ async def handle_message(raw: dict, session: Session, user: User):
         "codex_delete":      handle_codex_delete,
         "codex_link_set":    handle_codex_link_set,
         "codex_link_query":  handle_codex_link_query,
+        # ── Twitch Chat Bridge (chat_bridge role) ───────────────────────────
+        "chat_participant_join":      handle_chat_participant_join,
+        "chat_participant_leave":     handle_chat_participant_leave,
+        "chat_participant_target":    handle_chat_participant_target,
+        "chat_bridge_loot_grant":     handle_chat_bridge_loot_grant,
+        "chat_participant_inventory": handle_chat_participant_inventory,
+        # ── Chat Bridge admin (dm role only) ───────────────────────────────
+        "dm_chat_bridge_kill_switch":        handle_dm_chat_bridge_kill_switch,
+        "dm_grant_chat_participant_item":    handle_dm_grant_chat_participant_item,
     }
 
     decision = is_ws_message_allowed_for_role(msg_type, getattr(user, "role", None))

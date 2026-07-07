@@ -54,3 +54,7 @@ node_modules/
 test-results/
 playwright-report/
 .tmp/
+
+# Chat bridge secrets and dependencies
+chat-bridge/.env
+chat-bridge/node_modules/
