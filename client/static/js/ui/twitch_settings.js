@@ -107,6 +107,95 @@
         body: JSON.stringify({}),
       }).then(function () { refresh(); }).catch(function () { refresh(); });
     });
+
+    // Overlays section
+    var overlaySection = document.createElement('div');
+    overlaySection.style.cssText = 'margin-top:0.75rem;border-top:1px solid rgba(255,255,255,0.1);padding-top:0.65rem;';
+    overlaySection.innerHTML =
+      '<p style="font-size:0.68rem;color:var(--parchment-dim);margin:0 0 0.45rem;font-weight:600;letter-spacing:0.03em;">OBS Overlays</p>' +
+      '<div id="overlay-urls-wrap" style="font-size:0.66rem;color:var(--parchment-dim);">Loading…</div>';
+    body.appendChild(overlaySection);
+
+    fetch('/api/overlay/urls/' + encodeURIComponent(sessionId), { credentials: 'include' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        var wrap = document.getElementById('overlay-urls-wrap');
+        if (!wrap || !d) return;
+        wrap.innerHTML = _buildOverlayRow('Game Overlay', d.game_url, sessionId, 'game') +
+                         _buildOverlayRow('Arena Panel',  d.arena_url, sessionId, 'arena');
+
+        wrap.querySelectorAll('.ov-copy-btn').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            var url = btn.getAttribute('data-url');
+            if (navigator.clipboard) {
+              navigator.clipboard.writeText(url).then(function () {
+                btn.textContent = 'Copied!';
+                setTimeout(function () { btn.textContent = 'Copy'; }, 1500);
+              });
+            } else {
+              var ta = document.createElement('textarea');
+              ta.value = url; document.body.appendChild(ta); ta.select(); document.execCommand('copy');
+              document.body.removeChild(ta);
+              btn.textContent = 'Copied!';
+              setTimeout(function () { btn.textContent = 'Copy'; }, 1500);
+            }
+          });
+        });
+
+        wrap.querySelectorAll('.ov-regen-btn').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            var type = btn.getAttribute('data-type');
+            if (!confirm('Regenerate the ' + type + ' overlay URL? The old URL will stop working.')) return;
+            btn.disabled = true;
+            fetch('/api/overlay/regenerate/' + encodeURIComponent(sessionId) + '?type=' + type, {
+              method: 'POST',
+              credentials: 'include',
+            })
+              .then(function (r) { return r.ok ? r.json() : null; })
+              .then(function (d) {
+                if (!d || !d.url) { btn.disabled = false; return; }
+                var row = btn.closest('.ov-row');
+                if (row) {
+                  row.setAttribute('data-url', d.url);
+                  var copyBtn = row.querySelector('.ov-copy-btn');
+                  if (copyBtn) copyBtn.setAttribute('data-url', d.url);
+                  var input = row.querySelector('.ov-url-input');
+                  if (input) input.value = d.url;
+                }
+                btn.disabled = false;
+              })
+              .catch(function () { btn.disabled = false; });
+          });
+        });
+      })
+      .catch(function () {
+        var wrap = document.getElementById('overlay-urls-wrap');
+        if (wrap) wrap.textContent = 'Could not load overlay URLs.';
+      });
+  }
+
+  function _buildOverlayRow(label, url, sessionId, type) {
+    var safeUrl  = escHtml(url  || '');
+    var safeLabel = escHtml(label || '');
+    return (
+      '<div class="ov-row" data-url="' + safeUrl + '" style="margin-bottom:0.5rem;">' +
+        '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.2rem;">' +
+          '<span style="color:var(--parchment);font-weight:600;">' + safeLabel + '</span>' +
+          '<div style="display:flex;gap:0.3rem;">' +
+            '<button class="ov-copy-btn" data-url="' + safeUrl + '"' +
+                    ' style="padding:0.2rem 0.45rem;background:rgba(201,168,76,0.18);color:#c9a84c;' +
+                           'border:1px solid rgba(201,168,76,0.4);border-radius:4px;font-size:0.64rem;cursor:pointer;">Copy</button>' +
+            '<button class="ov-regen-btn" data-type="' + escHtml(type) + '"' +
+                    ' style="padding:0.2rem 0.45rem;background:rgba(120,80,30,0.18);color:#c9a07c;' +
+                           'border:1px solid rgba(120,80,30,0.4);border-radius:4px;font-size:0.64rem;cursor:pointer;">Regen</button>' +
+          '</div>' +
+        '</div>' +
+        '<input class="ov-url-input" type="text" value="' + safeUrl + '" readonly' +
+               ' style="width:100%;font-size:0.62rem;padding:0.2rem 0.4rem;background:rgba(0,0,0,0.25);' +
+                      'color:var(--parchment-dim);border:1px solid rgba(255,255,255,0.12);' +
+                      'border-radius:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" />' +
+      '</div>'
+    );
   }
 
   document.addEventListener('DOMContentLoaded', function () {

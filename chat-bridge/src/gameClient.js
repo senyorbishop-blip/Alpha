@@ -216,6 +216,9 @@ class GameClient {
         chat_participant_target: 'chat_participant_target_result',
         chat_bridge_loot_grant: 'chat_bridge_loot_grant_result',
         chat_participant_inventory: 'chat_participant_inventory_result',
+        chat_bridge_poll_vote: 'chat_bridge_poll_vote_result',
+        chat_participant_name_set: 'chat_participant_name_result',
+        chat_participant_me: 'chat_participant_me_result',
       }[type];
 
       if (ackType) {

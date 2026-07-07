@@ -153,6 +153,16 @@ CHAT_BRIDGE_ALLOWED_MESSAGE_TYPES = frozenset({
     "chat_bridge_loot_grant",
     # Inventory query for !inventory command
     "chat_participant_inventory",
+    # Poll voting from chat (!vote <N>)
+    "chat_bridge_poll_vote",
+    # Character name set via !name
+    "chat_participant_name_set",
+    # Character summary query via !me
+    "chat_participant_me",
+    # Arena stats sync (duel end — never touches campaign state)
+    "chat_participant_arena_stats_update",
+    # Arena display event relay (broadcast to overlays, no state change)
+    "arena_display_event",
 })
 
 PLAYER_KNOWN_GAMEPLAY_MESSAGE_TYPES = frozenset({
@@ -291,6 +301,10 @@ def is_ws_message_allowed_for_role(msg_type: str, role: str | None) -> WsPermiss
         if msg_type in PLAYER_KNOWN_GAMEPLAY_MESSAGE_TYPES:
             return WsPermissionDecision(True)
         return WsPermissionDecision(False, "player_unknown_type", "You don't have permission to do that.")
+    if role == "overlay":
+        if msg_type in PUBLIC_MESSAGE_TYPES:
+            return WsPermissionDecision(True)
+        return WsPermissionDecision(False, "overlay_readonly", None)
     if role == "chat_bridge":
         if msg_type in CHAT_BRIDGE_ALLOWED_MESSAGE_TYPES:
             return WsPermissionDecision(True)

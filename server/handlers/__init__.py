@@ -247,8 +247,13 @@ from server.handlers.chat_bridge import (
     handle_chat_participant_target,
     handle_chat_bridge_loot_grant,
     handle_chat_participant_inventory,
+    handle_chat_bridge_poll_vote,
+    handle_chat_participant_name_set,
+    handle_chat_participant_me,
     handle_dm_chat_bridge_kill_switch,
     handle_dm_grant_chat_participant_item,
+    handle_chat_participant_arena_stats_update,
+    handle_arena_display_event,
 )
 from server.handlers.token_placement_secure import handle_token_placed_secure
 from server.handlers.ws_permissions import is_ws_message_allowed_for_role
@@ -484,9 +489,16 @@ async def handle_message(raw: dict, session: Session, user: User):
         "chat_participant_target":    handle_chat_participant_target,
         "chat_bridge_loot_grant":     handle_chat_bridge_loot_grant,
         "chat_participant_inventory": handle_chat_participant_inventory,
+        "chat_bridge_poll_vote":      handle_chat_bridge_poll_vote,
+        "chat_participant_name_set":  handle_chat_participant_name_set,
+        "chat_participant_me":        handle_chat_participant_me,
         # ── Chat Bridge admin (dm role only) ───────────────────────────────
         "dm_chat_bridge_kill_switch":        handle_dm_chat_bridge_kill_switch,
         "dm_grant_chat_participant_item":    handle_dm_grant_chat_participant_item,
+        # ── Arena stats sync (chat_bridge role) ────────────────────────────
+        "chat_participant_arena_stats_update": handle_chat_participant_arena_stats_update,
+        # ── Arena display event relay (chat_bridge role, overlay broadcast) ─
+        "arena_display_event": handle_arena_display_event,
     }
 
     decision = is_ws_message_allowed_for_role(msg_type, getattr(user, "role", None))

@@ -6,5 +6,11 @@
   "!inv":       "inventory",
   "!target":    "target",
   "!use":       "target",
-  "!help":      "help"
+  "!help":      "help",
+  "!vote":      "vote",
+  "!name":      "name",
+  "!me":        "me",
+  "!duel":      "arena",
+  "!accept":    "arena",
+  "!decline":   "arena"
 }

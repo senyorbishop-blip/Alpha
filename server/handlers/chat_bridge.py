@@ -54,6 +54,15 @@ def _resolve_participant(session: Session, twitch_username: str) -> ChatParticip
         joined_at=float(raw.get("joined_at", time.time())),
         inventory=list(raw.get("inventory", [])),
         is_active=bool(raw.get("is_active", True)),
+        twitch_user_id=str(raw.get("twitch_user_id", "") or ""),
+        character_name=str(raw.get("character_name", "") or ""),
+        last_joined_session_id=str(raw.get("last_joined_session_id", "") or ""),
+        lifetime_stats=dict(raw.get("lifetime_stats", None) or {
+            "sessions_joined": 0, "items_used": 0, "damage_dealt": 0, "kills": 0,
+        }),
+        arena_stats=dict(raw.get("arena_stats", None) or {
+            "wins": 0, "losses": 0, "arena_gold": 0,
+        }),
     )
 
 
@@ -142,6 +151,7 @@ async def handle_chat_participant_join(payload: dict, session: Session, user: Us
 
     raw_username = str(payload.get("twitch_username") or "").strip()
     raw_display = str(payload.get("display_name") or raw_username).strip()
+    raw_user_id = str(payload.get("twitch_user_id") or "").strip()
 
     if not raw_username:
         await manager.send_to(session.id, user.id, {
@@ -152,7 +162,6 @@ async def handle_chat_participant_join(payload: dict, session: Session, user: Us
 
     key = raw_username.lower()
     display = _sanitize(raw_display)
-    username = _sanitize(raw_username)
 
     existing = session.chat_participants.get(key)
     if isinstance(existing, ChatParticipant) and existing.is_active:
@@ -167,14 +176,32 @@ async def handle_chat_participant_join(payload: dict, session: Session, user: Us
         # Rejoining after leave — reactivate, preserve inventory
         existing.is_active = True
         existing.display_name = display
+        if raw_user_id:
+            existing.twitch_user_id = _sanitize(raw_user_id, 32)
         participant = existing
+    elif isinstance(existing, dict):
+        # Restored from persistence — deserialise and reactivate
+        participant = _resolve_participant(session, key)
+        participant.is_active = True
+        participant.display_name = display
+        if raw_user_id:
+            participant.twitch_user_id = _sanitize(raw_user_id, 32)
+        session.chat_participants[key] = participant
     else:
         participant = ChatParticipant(
             twitch_username=key,
             display_name=display,
             joined_at=time.time(),
+            twitch_user_id=_sanitize(raw_user_id, 32) if raw_user_id else "",
         )
         session.chat_participants[key] = participant
+
+    # Track per-session join count (increment once per distinct session)
+    if participant.last_joined_session_id != session.id:
+        participant.lifetime_stats["sessions_joined"] = (
+            participant.lifetime_stats.get("sessions_joined", 0) + 1
+        )
+        participant.last_joined_session_id = session.id
 
     log_entry = session.add_log(
         f"{display} joined the tavern from Twitch chat.",
@@ -201,7 +228,14 @@ async def handle_chat_participant_join(payload: dict, session: Session, user: Us
 
     await manager.send_to(session.id, user.id, {
         "type": "chat_participant_join_ack",
-        "payload": {"twitch_username": key, "already_joined": False},
+        "payload": {
+            "twitch_username": key,
+            "already_joined": False,
+            "returning": participant.lifetime_stats.get("sessions_joined", 0) > 1,
+            "sessions_joined": participant.lifetime_stats.get("sessions_joined", 0),
+            "character_name": participant.character_name,
+            "lifetime_stats": participant.lifetime_stats,
+        },
     })
 
     await save_campaign_async(session.id)
@@ -286,6 +320,9 @@ async def handle_chat_participant_target(payload: dict, session: Session, user: 
     target_name = _sanitize(token.name)
 
     _consume_item(participant.inventory, item)
+    participant.lifetime_stats["items_used"] = (
+        participant.lifetime_stats.get("items_used", 0) + 1
+    )
 
     log_entry = session.add_log(
         f"{display} used {item_name} on {target_name}!",
@@ -465,6 +502,201 @@ async def handle_chat_participant_inventory(payload: dict, session: Session, use
 
 
 # ---------------------------------------------------------------------------
+# Poll voting from chat  (role: chat_bridge)
+# ---------------------------------------------------------------------------
+
+async def handle_chat_bridge_poll_vote(payload: dict, session: Session, user: User):
+    """
+    Chat viewer votes on the active session poll.
+
+    The bridge sends this on behalf of any chatter who types !vote <N>.
+    Chatters do not need to have joined (no !join required for voting).
+    Vote key is "chat:<twitch_username>" to avoid collisions with player user_ids.
+    """
+    if _kill_switch_check(session):
+        await manager.send_to(session.id, user.id, {
+            "type": "chat_bridge_poll_vote_result",
+            "payload": {"success": False, "error_code": "bridge_paused"},
+        })
+        return
+
+    raw_username = str(payload.get("twitch_username") or "").strip()
+    if not raw_username:
+        return
+
+    key = raw_username.lower()
+    poll_id = str(payload.get("poll_id") or "").strip()
+    option_index = payload.get("option_index")
+
+    poll = session.active_poll
+    if not poll or poll.get("closed"):
+        await manager.send_to(session.id, user.id, {
+            "type": "chat_bridge_poll_vote_result",
+            "payload": {"success": False, "error_code": "no_active_poll", "twitch_username": key},
+        })
+        return
+
+    if poll_id and poll_id != poll.get("id"):
+        await manager.send_to(session.id, user.id, {
+            "type": "chat_bridge_poll_vote_result",
+            "payload": {"success": False, "error_code": "poll_id_mismatch", "twitch_username": key},
+        })
+        return
+
+    options = poll.get("options") or []
+    if not isinstance(option_index, int) or option_index < 0 or option_index >= len(options):
+        await manager.send_to(session.id, user.id, {
+            "type": "chat_bridge_poll_vote_result",
+            "payload": {
+                "success": False,
+                "error_code": "invalid_option",
+                "twitch_username": key,
+                "max_valid": len(options),
+            },
+        })
+        return
+
+    vote_key = f"chat:{key}"
+    already_voted = vote_key in (poll.get("votes") or {})
+    poll.setdefault("votes", {})[vote_key] = option_index
+
+    from server.handlers.content import _broadcast_poll_state
+    await _broadcast_poll_state(session, "poll_updated")
+
+    await manager.send_to(session.id, user.id, {
+        "type": "chat_bridge_poll_vote_result",
+        "payload": {
+            "success": True,
+            "twitch_username": key,
+            "option_index": option_index,
+            "option_label": options[option_index],
+            "changed": already_voted,
+        },
+    })
+
+
+# ---------------------------------------------------------------------------
+# Character name set  (role: chat_bridge)
+# ---------------------------------------------------------------------------
+
+async def handle_chat_participant_name_set(payload: dict, session: Session, user: User):
+    """Chatter sets their in-game character name via !name <name>."""
+    if _kill_switch_check(session):
+        await manager.send_to(session.id, user.id, {
+            "type": "chat_participant_name_result",
+            "payload": {"success": False, "error_code": "bridge_paused"},
+        })
+        return
+
+    raw_username = str(payload.get("twitch_username") or "").strip()
+    raw_name = str(payload.get("character_name") or "").strip()
+    raw_user_id = str(payload.get("twitch_user_id") or "").strip()
+
+    key = raw_username.lower()
+    participant = _resolve_participant(session, key)
+    if participant is None or not participant.is_active:
+        await manager.send_to(session.id, user.id, {
+            "type": "chat_participant_name_result",
+            "payload": {"success": False, "error_code": "not_joined", "twitch_username": key},
+        })
+        return
+
+    if not raw_name:
+        await manager.send_to(session.id, user.id, {
+            "type": "chat_participant_name_result",
+            "payload": {"success": False, "error_code": "empty_name", "twitch_username": key},
+        })
+        return
+
+    # Sanitize: allow letters, numbers, spaces, hyphens, apostrophes
+    import re as _re
+    cleaned = _re.sub(r"[^a-zA-Z0-9 '\-]", "", raw_name).strip()[:32]
+    if not cleaned:
+        await manager.send_to(session.id, user.id, {
+            "type": "chat_participant_name_result",
+            "payload": {"success": False, "error_code": "invalid_chars", "twitch_username": key},
+        })
+        return
+
+    # Enforce uniqueness across active participants
+    cleaned_lower = cleaned.lower()
+    for other_key, other_p in session.chat_participants.items():
+        if other_key == key:
+            continue
+        other_name = ""
+        if isinstance(other_p, ChatParticipant):
+            other_name = other_p.character_name
+        elif isinstance(other_p, dict):
+            other_name = str(other_p.get("character_name", "") or "")
+        if other_name.lower() == cleaned_lower:
+            await manager.send_to(session.id, user.id, {
+                "type": "chat_participant_name_result",
+                "payload": {"success": False, "error_code": "name_taken", "twitch_username": key},
+            })
+            return
+
+    participant.character_name = cleaned
+    if raw_user_id:
+        participant.twitch_user_id = _sanitize(raw_user_id, 32)
+
+    log_entry = session.add_log(
+        f"{participant.display_name} is now known as {cleaned}.",
+        msg_type="chat_bridge",
+        user_name="Chat Bridge",
+    )
+
+    await manager.broadcast(session.id, {
+        "type": "chat_participant_updated",
+        "payload": {
+            "twitch_username": key,
+            "display_name": participant.display_name,
+            "character_name": cleaned,
+        },
+    })
+    await manager.broadcast(session.id, {
+        "type": "log_entry",
+        "payload": {"log": log_entry},
+    })
+    await manager.send_to(session.id, user.id, {
+        "type": "chat_participant_name_result",
+        "payload": {"success": True, "twitch_username": key, "character_name": cleaned},
+    })
+
+    await save_campaign_async(session.id)
+
+
+# ---------------------------------------------------------------------------
+# Character summary query  (role: chat_bridge)
+# ---------------------------------------------------------------------------
+
+async def handle_chat_participant_me(payload: dict, session: Session, user: User):
+    """Chatter queries their own character summary (for !me command)."""
+    raw_username = str(payload.get("twitch_username") or "").strip()
+    key = raw_username.lower()
+    participant = _resolve_participant(session, key)
+
+    if participant is None or not participant.is_active:
+        await manager.send_to(session.id, user.id, {
+            "type": "chat_participant_me_result",
+            "payload": {"found": False, "twitch_username": key},
+        })
+        return
+
+    await manager.send_to(session.id, user.id, {
+        "type": "chat_participant_me_result",
+        "payload": {
+            "found": True,
+            "twitch_username": key,
+            "display_name": participant.display_name,
+            "character_name": participant.character_name,
+            "inventory_count": len([i for i in participant.inventory if isinstance(i, dict)]),
+            "lifetime_stats": dict(participant.lifetime_stats or {}),
+            "arena_stats": dict(participant.arena_stats or {}),
+        },
+    })
+
+
+# ---------------------------------------------------------------------------
 # Kill switch  (role: dm — enforced in ws_permissions via DM_ADMIN_MESSAGE_TYPES)
 # ---------------------------------------------------------------------------
 
@@ -487,6 +719,51 @@ async def handle_dm_chat_bridge_kill_switch(payload: dict, session: Session, use
         "type": "log_entry",
         "payload": {"log": log_entry},
     })
+
+
+# ---------------------------------------------------------------------------
+# Arena stats update  (role: chat_bridge — arena-only, never campaign state)
+# ---------------------------------------------------------------------------
+
+async def handle_chat_participant_arena_stats_update(payload: dict, session: Session, user: User):
+    """
+    Sync arena win/loss/gold stats from the bridge to the server.
+
+    The arena module is isolated in the bridge — only this endpoint is called
+    when a duel ends. It touches ONLY participant.arena_stats; no campaign
+    tokens, inventories, or combat state are ever modified.
+    """
+    raw_username = str(payload.get("twitch_username") or "").strip()
+    if not raw_username:
+        return
+
+    key = raw_username.lower()
+    participant = _resolve_participant(session, key)
+    if participant is None:
+        # Auto-create a minimal record for chatters who earned stats without joining
+        participant = ChatParticipant(
+            twitch_username=key,
+            display_name=_sanitize(str(payload.get("display_name") or key)),
+            joined_at=time.time(),
+            is_active=False,
+        )
+        session.chat_participants[key] = participant
+
+    raw_stats = payload.get("arena_stats")
+    if not isinstance(raw_stats, dict):
+        return
+
+    arena = participant.arena_stats
+    if not isinstance(arena, dict):
+        arena = {"wins": 0, "losses": 0, "arena_gold": 0}
+        participant.arena_stats = arena
+
+    for field in ("wins", "losses", "arena_gold"):
+        val = raw_stats.get(field)
+        if isinstance(val, (int, float)) and val >= 0:
+            arena[field] = int(val)
+
+    await save_campaign_async(session.id)
 
 
 # ---------------------------------------------------------------------------
@@ -551,3 +828,38 @@ async def handle_dm_grant_chat_participant_item(payload: dict, session: Session,
     })
 
     await save_campaign_async(session.id)
+
+
+# ---------------------------------------------------------------------------
+# Arena display event relay  (role: chat_bridge, read-only broadcast)
+# ---------------------------------------------------------------------------
+
+async def handle_arena_display_event(payload: dict, session: Session, user: User):
+    """Relay an arena display event to all connected overlays.
+
+    The arena module emits these for OBS overlay consumption.  They are
+    display-only — no game state is modified.
+    """
+    event_type = str(payload.get("event_type") or "").strip()[:32]
+    if not event_type:
+        return
+
+    safe_payload = {
+        "event_type":        event_type,
+        "challenger":        _sanitize(str(payload.get("challenger") or ""), 32),
+        "opponent":          _sanitize(str(payload.get("opponent") or ""), 32),
+        "challenger_hp":     int(payload.get("challenger_hp") or 0),
+        "opponent_hp":       int(payload.get("opponent_hp") or 0),
+        "challenger_max_hp": int(payload.get("challenger_max_hp") or 0),
+        "opponent_max_hp":   int(payload.get("opponent_max_hp") or 0),
+        "round":             int(payload.get("round") or 0),
+        "roll":              int(payload.get("roll") or 0),
+        "damage":            int(payload.get("damage") or 0),
+        "winner":            _sanitize(str(payload.get("winner") or ""), 32),
+        "message":           _sanitize(str(payload.get("message") or ""), 120),
+    }
+
+    await manager.broadcast(session.id, {
+        "type": "arena_display_event",
+        "payload": safe_payload,
+    })

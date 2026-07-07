@@ -699,10 +699,19 @@ def _serialize_chat_participants(participants: dict) -> dict:
         if hasattr(p, "__dataclass_fields__"):
             out[key] = {
                 "twitch_username": p.twitch_username,
+                "twitch_user_id": getattr(p, "twitch_user_id", "") or "",
                 "display_name": p.display_name,
                 "joined_at": p.joined_at,
                 "inventory": list(p.inventory),
                 "is_active": p.is_active,
+                "character_name": getattr(p, "character_name", "") or "",
+                "last_joined_session_id": getattr(p, "last_joined_session_id", "") or "",
+                "lifetime_stats": dict(getattr(p, "lifetime_stats", None) or {
+                    "sessions_joined": 0, "items_used": 0, "damage_dealt": 0, "kills": 0,
+                }),
+                "arena_stats": dict(getattr(p, "arena_stats", None) or {
+                    "wins": 0, "losses": 0, "arena_gold": 0,
+                }),
             }
         elif isinstance(p, dict):
             out[key] = p

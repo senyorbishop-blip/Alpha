@@ -379,6 +379,8 @@ def init_db():
             "ALTER TABLE campaigns ADD COLUMN twitch_refresh_token_enc TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE campaigns ADD COLUMN twitch_token_expires_at REAL NOT NULL DEFAULT 0",
             "ALTER TABLE campaigns ADD COLUMN twitch_chat_enabled INTEGER NOT NULL DEFAULT 1",
+            "ALTER TABLE campaigns ADD COLUMN overlay_game_token TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE campaigns ADD COLUMN overlay_arena_token TEXT NOT NULL DEFAULT ''",
         ]:
             try:
                 conn.execute(migration)

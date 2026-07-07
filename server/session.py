@@ -561,6 +561,20 @@ class ChatParticipant:
     joined_at: float
     inventory: list = field(default_factory=list)  # list of item dicts
     is_active: bool = True
+    twitch_user_id: str = ""          # Twitch numeric user ID (stable across name changes)
+    character_name: str = ""          # custom in-game name set via !name
+    last_joined_session_id: str = ""  # tracks new-session joins for sessions_joined counting
+    lifetime_stats: dict = field(default_factory=lambda: {
+        "sessions_joined": 0,
+        "items_used": 0,
+        "damage_dealt": 0,
+        "kills": 0,
+    })
+    arena_stats: dict = field(default_factory=lambda: {
+        "wins": 0,
+        "losses": 0,
+        "arena_gold": 0,
+    })
 
 
 @dataclass
@@ -642,6 +656,7 @@ class Session:
     # chat_participants keyed by lowercase Twitch username.
     chat_participants: dict = field(default_factory=dict)
     chat_bridge_paused: bool = False
+    arena_enabled: bool = True
     # _encumbrance_cache is set dynamically; keyed by user_id → {state, speed_penalty}
     # Not declared here so it doesn't show up in persistence serialisation.
 

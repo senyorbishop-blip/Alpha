@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Tavern Tabletop — Game Overlay</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: transparent;
+      overflow: hidden;
+      font-family: 'Georgia', 'Times New Roman', serif;
+      width: 100vw;
+      height: 100vh;
+    }
+
+    /* ── Toast notifications ─────────────────────────────────── */
+    #toast-container {
+      position: fixed;
+      bottom: 80px;
+      left: 40px;
+      display: flex;
+      flex-direction: column-reverse;
+      gap: 10px;
+      pointer-events: none;
+      max-width: 480px;
+    }
+
+    .toast {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 16px;
+      border-radius: 8px;
+      background: rgba(10, 8, 5, 0.82);
+      border-left: 4px solid #c9a84c;
+      color: #f0e6c8;
+      font-size: 15px;
+      line-height: 1.4;
+      box-shadow: 0 4px 18px rgba(0,0,0,0.55);
+      backdrop-filter: blur(4px);
+      animation: toast-in 0.35s ease forwards;
+      max-width: 100%;
+    }
+    .toast.toast-loot { border-left-color: #9146ff; }
+    .toast.toast-action { border-left-color: #e07070; }
+    .toast.toast-name { border-left-color: #70c070; }
+    .toast.toast-out {
+      animation: toast-out 0.4s ease forwards;
+    }
+
+    .toast-icon { font-size: 18px; flex-shrink: 0; }
+    .toast-text { flex: 1; }
+
+    @keyframes toast-in {
+      from { opacity: 0; transform: translateX(-24px); }
+      to   { opacity: 1; transform: translateX(0); }
+    }
+    @keyframes toast-out {
+      from { opacity: 1; transform: translateX(0); }
+      to   { opacity: 0; transform: translateX(-24px); }
+    }
+
+    /* ── Poll vote bar ───────────────────────────────────────── */
+    #poll-panel {
+      position: fixed;
+      top: 40px;
+      right: 40px;
+      width: 320px;
+      background: rgba(10, 8, 5, 0.82);
+      border: 1px solid rgba(201,168,76,0.4);
+      border-radius: 10px;
+      padding: 14px 16px;
+      backdrop-filter: blur(6px);
+      color: #f0e6c8;
+      display: none;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+    }
+    #poll-panel.visible { display: block; }
+
+    #poll-question {
+      font-size: 13px;
+      font-weight: bold;
+      color: #c9a84c;
+      margin-bottom: 10px;
+      line-height: 1.3;
+    }
+
+    .poll-option {
+      margin-bottom: 8px;
+    }
+    .poll-option-label {
+      font-size: 12px;
+      margin-bottom: 3px;
+      display: flex;
+      justify-content: space-between;
+    }
+    .poll-option-bar-bg {
+      width: 100%;
+      height: 10px;
+      background: rgba(255,255,255,0.12);
+      border-radius: 5px;
+      overflow: hidden;
+    }
+    .poll-option-bar-fill {
+      height: 100%;
+      border-radius: 5px;
+      background: linear-gradient(90deg, #9146ff, #c9a84c);
+      transition: width 0.4s ease;
+    }
+
+    #poll-total {
+      margin-top: 8px;
+      font-size: 11px;
+      color: rgba(240,230,200,0.55);
+      text-align: right;
+    }
+
+    #poll-winner-banner {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(10, 8, 5, 0.88);
+      border: 2px solid #c9a84c;
+      border-radius: 14px;
+      padding: 22px 40px;
+      text-align: center;
+      color: #f0e6c8;
+      display: none;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.7);
+      pointer-events: none;
+    }
+    #poll-winner-banner.visible { display: block; animation: pop-in 0.4s ease; }
+    #poll-winner-banner .winner-label { font-size: 13px; color: #c9a84c; margin-bottom: 6px; }
+    #poll-winner-banner .winner-text  { font-size: 22px; font-weight: bold; }
+    #poll-winner-banner .winner-votes { font-size: 12px; color: rgba(240,230,200,0.6); margin-top: 4px; }
+
+    @keyframes pop-in {
+      from { opacity: 0; transform: translate(-50%, -50%) scale(0.8); }
+      to   { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+    }
+
+    /* ── Connection status dot (only visible when disconnected) ─ */
+    #conn-dot {
+      position: fixed;
+      top: 10px;
+      left: 10px;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #e07070;
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+    #conn-dot.disconnected { opacity: 0.7; }
+  </style>
+</head>
+<body>
+
+<div id="conn-dot"></div>
+<div id="toast-container"></div>
+
+<div id="poll-panel">
+  <div id="poll-question"></div>
+  <div id="poll-options"></div>
+  <div id="poll-total"></div>
+</div>
+
+<div id="poll-winner-banner">
+  <div class="winner-label">Vote Result</div>
+  <div class="winner-text" id="winner-text"></div>
+  <div class="winner-votes" id="winner-votes"></div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var SESSION_ID  = {{ session_id | tojson }};
+  var WS_TOKEN    = {{ overlay_jwt | tojson }};
+  var WS_BASE_URL = {{ ws_url | tojson }};
+
+  var ws = null;
+  var reconnectDelay = 1000;
+  var maxDelay = 30000;
+  var pollState = null;
+  var toastQueue = [];
+
+  // ── Connection ─────────────────────────────────────────────────────────────
+
+  function connect() {
+    var url = WS_BASE_URL + '/ws/' + SESSION_ID + '/overlay_game?token=' + encodeURIComponent(WS_TOKEN);
+    ws = new WebSocket(url);
+
+    ws.onopen = function () {
+      reconnectDelay = 1000;
+      document.getElementById('conn-dot').classList.remove('disconnected');
+    };
+
+    ws.onclose = function () {
+      document.getElementById('conn-dot').classList.add('disconnected');
+      setTimeout(connect, reconnectDelay);
+      reconnectDelay = Math.min(reconnectDelay * 2, maxDelay);
+    };
+
+    ws.onerror = function () { ws.close(); };
+
+    ws.onmessage = function (evt) {
+      try {
+        var msg = JSON.parse(evt.data);
+        handleMessage(msg);
+      } catch (_) {}
+    };
+  }
+
+  // ── Heartbeat ──────────────────────────────────────────────────────────────
+
+  setInterval(function () {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'pong' }));
+    }
+  }, 20000);
+
+  // ── Event handler ──────────────────────────────────────────────────────────
+
+  function handleMessage(msg) {
+    var t = msg.type;
+    var p = msg.payload || {};
+
+    if (t === 'ping') {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'pong' }));
+      }
+      return;
+    }
+
+    if (t === 'chat_participant_joined') {
+      var name = p.display_name || p.twitch_username || 'Someone';
+      showToast('⚔️', esc(name) + ' entered the tavern!', 'toast-join', 5000);
+      return;
+    }
+
+    if (t === 'chat_participant_loot_received') {
+      var name = p.display_name || p.twitch_username || 'Someone';
+      var item = p.item_name || 'an item';
+      var trigger = p.trigger || '';
+      var icon = trigger === 'sub' ? '⭐' : trigger === 'bits' ? '💎' : '⚡';
+      showToast(icon, esc(name) + ' received <b>' + esc(item) + '</b>!', 'toast-loot', 6000);
+      return;
+    }
+
+    if (t === 'chat_participant_action_result') {
+      var name = p.display_name || p.twitch_username || 'Someone';
+      var item = p.item_name || 'an item';
+      var target = p.target_name || 'a target';
+      showToast('🎯', esc(name) + ' used <b>' + esc(item) + '</b> on ' + esc(target) + '!', 'toast-action', 5000);
+      return;
+    }
+
+    if (t === 'chat_participant_updated') {
+      var name = p.display_name || p.twitch_username || 'Someone';
+      var charName = p.character_name || name;
+      showToast('✏️', esc(name) + ' is now known as <b>' + esc(charName) + '</b>!', 'toast-name', 4000);
+      return;
+    }
+
+    if (t === 'chat_participant_item_granted') {
+      var name = p.display_name || p.twitch_username || 'Someone';
+      var item = p.item_name || 'an item';
+      showToast('🎁', esc(name) + ' was granted <b>' + esc(item) + '</b>!', 'toast-loot', 5000);
+      return;
+    }
+
+    if (t === 'poll_created') {
+      pollState = {
+        question: p.question || '',
+        options: (p.options || []).map(function (o) { return { text: o, votes: 0 }; }),
+        total: 0,
+      };
+      renderPoll();
+      return;
+    }
+
+    if (t === 'poll_updated') {
+      if (!pollState) return;
+      var votes = p.votes || {};
+      pollState.options.forEach(function (opt, i) {
+        opt.votes = parseInt(votes[String(i)] || 0, 10);
+      });
+      pollState.total = pollState.options.reduce(function (s, o) { return s + o.votes; }, 0);
+      renderPoll();
+      return;
+    }
+
+    if (t === 'poll_closed') {
+      hidePoll();
+      var winner = p.winner || '';
+      var count  = p.count  || 0;
+      var total  = p.total  || 0;
+      if (winner) {
+        showWinner(winner, count, total);
+      }
+      pollState = null;
+      return;
+    }
+
+    if (t === 'state_sync') {
+      // Restore active poll on reconnect
+      var active = (p.active_poll) || {};
+      if (active.question && active.options && active.options.length) {
+        pollState = {
+          question: active.question,
+          options: active.options.map(function (o, i) {
+            return { text: o, votes: parseInt((active.votes || {})[String(i)] || 0, 10) };
+          }),
+          total: 0,
+        };
+        pollState.total = pollState.options.reduce(function (s, o) { return s + o.votes; }, 0);
+        renderPoll();
+      }
+      return;
+    }
+  }
+
+  // ── Poll rendering ─────────────────────────────────────────────────────────
+
+  function renderPoll() {
+    if (!pollState) return;
+    document.getElementById('poll-question').textContent = pollState.question;
+    var container = document.getElementById('poll-options');
+    container.innerHTML = '';
+    pollState.options.forEach(function (opt, i) {
+      var pct = pollState.total > 0 ? Math.round((opt.votes / pollState.total) * 100) : 0;
+      var el = document.createElement('div');
+      el.className = 'poll-option';
+      el.innerHTML =
+        '<div class="poll-option-label">' +
+          '<span>' + esc(opt.text) + '</span>' +
+          '<span>' + pct + '%</span>' +
+        '</div>' +
+        '<div class="poll-option-bar-bg">' +
+          '<div class="poll-option-bar-fill" style="width:' + pct + '%"></div>' +
+        '</div>';
+      container.appendChild(el);
+    });
+    document.getElementById('poll-total').textContent = pollState.total + ' vote' + (pollState.total !== 1 ? 's' : '');
+    document.getElementById('poll-panel').classList.add('visible');
+  }
+
+  function hidePoll() {
+    document.getElementById('poll-panel').classList.remove('visible');
+  }
+
+  function showWinner(winner, count, total) {
+    document.getElementById('winner-text').textContent = winner;
+    document.getElementById('winner-votes').textContent = count + ' of ' + total + ' vote' + (total !== 1 ? 's' : '');
+    var banner = document.getElementById('poll-winner-banner');
+    banner.classList.add('visible');
+    setTimeout(function () {
+      banner.classList.remove('visible');
+    }, 6000);
+  }
+
+  // ── Toast system ───────────────────────────────────────────────────────────
+
+  function showToast(icon, html, cls, duration) {
+    var container = document.getElementById('toast-container');
+    var el = document.createElement('div');
+    el.className = 'toast ' + (cls || '');
+    el.innerHTML =
+      '<span class="toast-icon">' + icon + '</span>' +
+      '<span class="toast-text">' + html + '</span>';
+    container.appendChild(el);
+
+    setTimeout(function () {
+      el.classList.add('toast-out');
+      setTimeout(function () {
+        if (el.parentNode) el.parentNode.removeChild(el);
+      }, 400);
+    }, duration || 5000);
+  }
+
+  // ── HTML escape ────────────────────────────────────────────────────────────
+
+  function esc(s) {
+    return String(s || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  connect();
+})();
+</script>
+</body>
+</html>

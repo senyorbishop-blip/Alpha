@@ -18,5 +18,20 @@
   "inventory_not_joined": "{user}, you're not in the tavern yet — type !join first.",
   "inventory_cooldown": "{user}, please wait {seconds}s before checking inventory again.",
   "help_header":    "Available commands: {commands}",
-  "bridge_paused":  "{user}, chat interactions are paused by the DM. Hang tight!"
+  "bridge_paused":  "{user}, chat interactions are paused by the DM. Hang tight!",
+  "vote_registered": "@{user} Your vote for option {number} ({option}) has been recorded!",
+  "vote_changed": "@{user} Changed your vote to option {number} ({option}).",
+  "vote_invalid": "@{user} Invalid option. Type !vote 1 through !vote {max}.",
+  "vote_no_poll": "@{user} There's no active vote right now.",
+  "vote_cooldown": "@{user} Wait {seconds}s before voting again.",
+  "poll_announce": "VOTE: {question} — {options} — {duration}",
+  "poll_result": "Vote closed! Result: {winner} won with {count} vote(s) out of {total}.",
+  "name_set": "@{user} You are now known as {name}!",
+  "name_taken": "@{user} That name is already taken. Choose another.",
+  "name_invalid": "@{user} Name must use letters, numbers, spaces, hyphens, or apostrophes (max 32 chars).",
+  "name_not_joined": "@{user} Type !join first.",
+  "name_cooldown": "@{user} Wait {seconds}s before changing your name again.",
+  "me_summary": "@{user} — {charName} | Items: {items} | Sessions: {sessions} | Damage dealt: {damage} | Arena: {wins}W/{losses}L",
+  "me_not_joined": "@{user} Type !join first to enter the game.",
+  "me_cooldown": "@{user} Wait {seconds}s."
 }
