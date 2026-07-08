@@ -23,6 +23,8 @@ function makeStatsCollector() {
   };
 }
 
+const arenas = [];
+
 function makeArena(opts = {}) {
   const twitch = makeTwitch();
   const collector = makeStatsCollector();
@@ -32,8 +34,13 @@ function makeArena(opts = {}) {
     logger: { info: () => {}, warn: () => {}, error: () => {} },
     onStatsUpdate: collector.fn,
   });
+  arenas.push(arena);
   return { arena, twitch, collector };
 }
+
+afterEach(() => {
+  while (arenas.length) arenas.pop().destroy();
+});
 
 const CH = '#test';
 
