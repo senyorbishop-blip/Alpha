@@ -339,6 +339,7 @@
       'loot-shop': { label: 'Loot / Shop', primaryTools: [] },
       'session-tools': { label: 'Session Tools', primaryTools: [] },
       'viewer-powers': { label: 'Viewer Powers', primaryTools: [] },
+      stream: { label: 'Stream', primaryTools: [] },
       debug: { label: 'Debug', primaryTools: [], closedByDefault: true },
     };
   }

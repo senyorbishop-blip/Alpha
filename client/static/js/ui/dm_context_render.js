@@ -411,6 +411,7 @@
     'loot-shop':     { gly: '\uD83C\uDFEA', title: 'Loot / Shop', note: 'Economy \u00B7 rewards' },
     'session-tools': { gly: '\uD83D\uDCDC', title: 'Session Tools', note: 'Story \u00B7 journal \u00B7 audio' },
     'viewer-powers': { gly: '\uD83D\uDC41', title: 'Viewer Powers', note: 'DM only \u00B7 chaos control' },
+    'stream':        { gly: '\uD83D\uDCFA', title: 'Stream',      note: 'Twitch \u00B7 overlays \u00B7 bridge' },
     'debug':         { gly: '\uD83D\uDC1E', title: 'Debug',       note: 'Troubleshooting' },
   };
   var TABS = {
@@ -421,6 +422,7 @@
     'loot-shop':     [['shop', 'Items'], ['inventory', 'Party']],
     'session-tools': [['handouts', 'Handouts'], ['memory', 'Journal']],
     'viewer-powers': [['party', 'Viewers']],
+    'stream':        [],
     'debug':         [],
   };
 
@@ -504,6 +506,15 @@
           '</div>') +
         block('Management', '<button class="dcx-primary wide" type="button" onclick="AppUIDMActions.openViewerPowers()">Open compact viewer powers drawer \u25B8</button>');
     },
+    'stream': function () {
+      // Content is the shared Twitch Integration panel (twitch_settings.js) —
+      // mounted by afterRender so connect/disconnect/overlay logic stays in
+      // one place instead of being duplicated here.
+      return block('Twitch Integration',
+        '<div id="dcx-stream-panel" style="font-size:0.7rem;">' +
+          empty('Loading Twitch settings…') +
+        '</div>');
+    },
     'debug': function () {
       return block('Diagnostics',
         '<div class="dcx-toollist">' +
@@ -531,6 +542,14 @@
         var real = document.getElementById('bestiary-search');
         if (real) { real.value = search.value; real.dispatchEvent(new Event('input', { bubbles: true })); }
       });
+    }
+    var streamPanel = container.querySelector('#dcx-stream-panel');
+    if (streamPanel) {
+      if (window.TwitchSettingsPanel && typeof window.TwitchSettingsPanel.renderInto === 'function') {
+        window.TwitchSettingsPanel.renderInto(streamPanel);
+      } else {
+        streamPanel.innerHTML = empty('Twitch settings module not loaded.');
+      }
     }
   }
 

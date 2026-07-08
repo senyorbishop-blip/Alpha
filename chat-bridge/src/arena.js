@@ -59,8 +59,13 @@ class Arena {
     this._queue       = [];         // [{channel, challenger, challenged}] for quiet mode
     this._interStats  = new Map();  // username → { wins, losses, arena_gold }
 
-    // Cleanup expired challenges every 10s
+    // Cleanup expired challenges every 10s. This is background housekeeping —
+    // it must not keep the process alive on its own (nor hold Jest open).
     this._cleanupTimer = setInterval(() => this._cleanupExpiredChallenges(), 10_000);
+    if (typeof this._cleanupTimer.unref === 'function') this._cleanupTimer.unref();
+
+    // All pending duel-message timeouts, so destroy() can cancel in-flight duels
+    this._messageTimers = new Set();
   }
 
   // ── Public API ──────────────────────────────────────────────────────────────
@@ -274,7 +279,8 @@ class Arena {
 
     // Send messages with delay, emitting display events alongside each round
     messages.forEach((msg, i) => {
-      setTimeout(() => {
+      const timer = setTimeout(() => {
+        this._messageTimers.delete(timer);
         this._twitch.say(state.channel, msg);
         const p = state.participants;
         this._onDisplay({
@@ -292,6 +298,7 @@ class Arena {
           this._finishDuel(state, challenger, challenged);
         }
       }, i * MSG_INTERVAL);
+      this._messageTimers.add(timer);
     });
   }
 
@@ -442,6 +449,8 @@ class Arena {
 
   destroy() {
     clearInterval(this._cleanupTimer);
+    for (const timer of this._messageTimers) clearTimeout(timer);
+    this._messageTimers.clear();
     for (const state of new Set([...this._activeDuels.values()])) {
       if (state.turnTimer) clearTimeout(state.turnTimer);
     }
