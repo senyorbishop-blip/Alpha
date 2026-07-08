@@ -28,8 +28,10 @@ from fastapi.templating import Jinja2Templates
 from pathlib import Path
 
 from server.auth.jwt_utils import _JWT_SECRET, _ALGORITHM
+from server.auth.models import get_campaign_owner_user_id
 from server.db import get_conn
-from server.http.auth import is_session_dm
+from server.http.auth import get_request_token_sub, get_request_user
+from server.http.session_access import get_or_restore_session, request_has_dm_access
 
 try:
     import jwt as _jwt
@@ -59,8 +61,26 @@ def _make_overlay_jwt(user_id: str, session_id: str) -> str:
 
 
 def _resolve_dm(request: Request, session_id: str) -> bool:
-    """Return True if the request JWT belongs to the DM (or owner account) of this session."""
-    return is_session_dm(request, session_id)
+    """Return True if the request is authorized as this session's DM.
+
+    Delegates to the canonical resolver (request_has_dm_access), which matches
+    the session dm_id, a participant with role=dm, or a session user linked to
+    the authenticated account via auth_player_key. The JWT subject is passed
+    as fallback_user_id so legacy session-scoped tokens (sub == per-session
+    dm_id, no registered account) keep working. Falls back to the campaign
+    owner account (campaigns.owner_user_id) for claimed campaigns whose owner
+    never joined the live session.
+    """
+    session = get_or_restore_session(session_id)
+    if session and request_has_dm_access(
+        request, session, fallback_user_id=get_request_token_sub(request)
+    ):
+        return True
+    auth_user = get_request_user(request)
+    if not auth_user:
+        return False
+    owner_id = get_campaign_owner_user_id(session_id)
+    return bool(owner_id) and str(auth_user.get("id") or "") == owner_id
 
 
 def _get_or_create_overlay_tokens(session_id: str) -> dict | None:

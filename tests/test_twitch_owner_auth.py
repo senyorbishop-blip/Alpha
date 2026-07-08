@@ -28,6 +28,7 @@ from server.auth.models import (
     init_auth_db,
 )
 from server.db import init_db, save_campaign
+from server.http.auth import auth_player_key
 from server.session import create_session, get_session, _sessions
 
 _CSRF = "c" * 32
@@ -135,6 +136,50 @@ def test_owner_account_passes_all_dm_guarded_endpoints(client):
     assert resp.status_code == 200, resp.text
 
     resp = _post(client, f"/api/overlay/regenerate/{session.id}?type=game", owner["id"])
+    assert resp.status_code == 200, resp.text
+
+
+def _make_player_key_linked_session():
+    """Create a live session whose DM user is linked to an account only via
+    auth_player_key — the account id differs from session.dm_id and the
+    campaign row is never claimed (owner_user_id stays NULL), so the account
+    can only pass the DM guard through the canonical resolver's player_key
+    mapping."""
+    session, dm = create_session("Player-Key DM")
+    suffix = secrets.token_hex(4)
+    account = create_user(f"linked_{suffix}", f"l{suffix}@example.com", "x", "dm")
+    assert account["id"] != session.dm_id  # the premise of the regression
+    assert get_campaign_owner_user_id(session.id) is None
+    dm.player_key = auth_player_key(account["id"])
+    save_campaign(session)
+    return session, dm, account
+
+
+def test_auth_player_key_mapped_account_passes_dm_guard(client):
+    """Regression: an account resolved to the session DM via auth_player_key
+    (matched_via=player_key, is_session_dm=True) must pass _resolve_dm."""
+    session, _dm, account = _make_player_key_linked_session()
+    resp = _get(client, f"/api/twitch/connect/{session.id}", account["id"])
+    assert resp.status_code in (302, 307), resp.text
+    assert resp.headers["location"].startswith("https://id.twitch.tv/oauth2/authorize")
+
+
+def test_auth_player_key_mapped_account_passes_all_dm_guarded_endpoints(client):
+    session, _dm, account = _make_player_key_linked_session()
+
+    resp = _get(client, f"/api/twitch/status/{session.id}", account["id"])
+    assert resp.status_code == 200, resp.text
+
+    resp = _post(client, f"/api/twitch/toggle/{session.id}", account["id"], json={"enabled": True})
+    assert resp.status_code == 200, resp.text
+
+    resp = _post(client, f"/api/twitch/disconnect/{session.id}", account["id"])
+    assert resp.status_code == 200, resp.text
+
+    resp = _get(client, f"/api/overlay/urls/{session.id}", account["id"])
+    assert resp.status_code == 200, resp.text
+
+    resp = _post(client, f"/api/overlay/regenerate/{session.id}?type=game", account["id"])
     assert resp.status_code == 200, resp.text
 
 
