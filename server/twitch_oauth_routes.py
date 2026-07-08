@@ -8,7 +8,8 @@ Routes:
   POST /api/twitch/disconnect/{session_id} — revoke token, clear DB columns
   POST /api/twitch/toggle/{session_id}     — toggle twitch_chat_enabled
 
-All endpoints except /callback verify the caller is the session DM via JWT.
+All endpoints except /callback verify the caller is the session DM (by
+dm_id or by owning the campaign via owner_user_id) via JWT.
 The /callback endpoint verifies an HMAC-signed state parameter generated at
 connect-time.
 """
@@ -27,8 +28,8 @@ import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
-from server.auth.jwt_utils import verify_token
-from server.db import get_conn, load_campaign
+from server.db import get_conn
+from server.http.auth import is_session_dm
 from server.session import get_session
 from server.token_enc import encrypt, decrypt
 
@@ -96,23 +97,8 @@ def _public_base_url(request: Request) -> str:
 
 
 def _resolve_dm(request: Request, session_id: str) -> bool:
-    """Return True if the request JWT belongs to the DM of this session."""
-    token = (
-        request.cookies.get("dnd_session")
-        or (request.headers.get("authorization") or "").removeprefix("Bearer ").strip()
-    )
-    if not token:
-        return False
-    payload = verify_token(token)
-    if not payload:
-        return False
-    user_id = str(payload.get("sub") or "")
-    session = get_session(session_id)
-    if session:
-        return user_id == session.dm_id
-    # Session not in memory — check persisted dm_id
-    data = load_campaign(session_id)
-    return bool(data and data.get("dm_id") == user_id)
+    """Return True if the request JWT belongs to the DM (or owner account) of this session."""
+    return is_session_dm(request, session_id)
 
 
 def _get_twitch_row(session_id: str) -> dict | None:

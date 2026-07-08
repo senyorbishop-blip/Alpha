@@ -27,9 +27,9 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from pathlib import Path
 
-from server.auth.jwt_utils import verify_token, _JWT_SECRET, _ALGORITHM
-from server.db import get_conn, load_campaign
-from server.session import get_session
+from server.auth.jwt_utils import _JWT_SECRET, _ALGORITHM
+from server.db import get_conn
+from server.http.auth import is_session_dm
 
 try:
     import jwt as _jwt
@@ -59,22 +59,8 @@ def _make_overlay_jwt(user_id: str, session_id: str) -> str:
 
 
 def _resolve_dm(request: Request, session_id: str) -> bool:
-    """Return True if the request JWT belongs to the DM of this session."""
-    token = (
-        request.cookies.get("dnd_session")
-        or (request.headers.get("authorization") or "").removeprefix("Bearer ").strip()
-    )
-    if not token:
-        return False
-    payload = verify_token(token)
-    if not payload:
-        return False
-    user_id = str(payload.get("sub") or "")
-    session = get_session(session_id)
-    if session:
-        return user_id == session.dm_id
-    data = load_campaign(session_id)
-    return bool(data and data.get("dm_id") == user_id)
+    """Return True if the request JWT belongs to the DM (or owner account) of this session."""
+    return is_session_dm(request, session_id)
 
 
 def _get_or_create_overlay_tokens(session_id: str) -> dict | None:

@@ -496,6 +496,18 @@ def claim_campaign(campaign_id: str, user_id: str, username: str) -> bool:
         return result.rowcount > 0
 
 
+def get_campaign_owner_user_id(campaign_id: str) -> Optional[str]:
+    """Return the owning account's user id for a campaign, or None if unclaimed."""
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT owner_user_id FROM campaigns WHERE id=?", (campaign_id,)
+        ).fetchone()
+    if not row:
+        return None
+    owner = row["owner_user_id"]
+    return str(owner) if owner else None
+
+
 # ── User stats ────────────────────────────────────────────────────────────────
 
 def get_user_stats(user_id: str) -> Optional[dict]:
