@@ -1,9 +1,16 @@
 /**
  * client/static/js/ui/twitch_settings.js
  *
- * DM-only Twitch Integration panel inside the flyout-theme settings flyout.
- * Fetches /api/twitch/status to show connection state and exposes connect /
- * disconnect / enable-toggle controls.
+ * DM-only Twitch Integration panel. Fetches /api/twitch/status to show
+ * connection state (including whether the chat bridge service is connected)
+ * and exposes connect / disconnect / enable-toggle controls plus OBS overlay
+ * URLs.
+ *
+ * The panel renders into any container element, so the same logic drives
+ * both the settings-flyout instance (#twitch-settings-body) and the Stream
+ * mode view in the DM Modes rail (see dm_context_render.js). Reuse via:
+ *
+ *   window.TwitchSettingsPanel.renderInto(containerEl)
  */
 (function () {
   'use strict';
@@ -28,33 +35,71 @@
     refresh();
   }
 
-  async function refresh() {
+  /** Refresh the settings-flyout instance. */
+  function refresh() {
+    var body = document.getElementById('twitch-settings-body');
+    if (body) renderInto(body);
+  }
+
+  /** Fetch status and render the full panel into an arbitrary container. */
+  async function renderInto(container) {
+    if (!container) return;
     var sessionId = getSessionId();
     if (!sessionId) return;
 
-    var body = document.getElementById('twitch-settings-body');
-    if (body) body.innerHTML = '<span style="font-size:0.7rem;color:var(--parchment-dim);">Loading…</span>';
+    container.innerHTML = '<span style="font-size:0.7rem;color:var(--parchment-dim);">Loading…</span>';
 
     try {
       var res = await fetch('/api/twitch/status/' + encodeURIComponent(sessionId), {
         credentials: 'include',
       });
-      if (!res.ok) { renderPanel(null); return; }
+      if (!res.ok) { renderPanel(null, container); return; }
       var data = await res.json();
-      renderPanel(data);
+      renderPanel(data, container);
     } catch (_) {
-      renderPanel(null);
+      renderPanel(null, container);
     }
   }
 
-  function renderPanel(data) {
-    var body = document.getElementById('twitch-settings-body');
+  // ── Bridge status row (chat bridge service ⇄ this session) ─────────────────
+
+  function _bridgeStatusHtml(data) {
+    var known = !!(data && typeof data.bridge_connected === 'boolean');
+    var up = !!(data && data.bridge_connected);
+    var dotColor = up ? '#3fca6b' : 'rgba(255,255,255,0.28)';
+    var label = up ? 'Bridge connected' : 'Bridge not running';
+    var labelColor = up ? '#3fca6b' : 'var(--parchment-dim)';
+    var hint = up
+      ? 'Chat commands like !join are live.'
+      : 'Start the chat-bridge service to enable chat commands.';
+    if (!known) { label = 'Bridge status unknown'; hint = ''; }
+    return (
+      '<div class="twitch-bridge-status" style="display:flex;align-items:center;gap:0.4rem;margin-bottom:0.6rem;">' +
+        '<span style="width:9px;height:9px;border-radius:50%;background:' + dotColor + ';flex-shrink:0;' +
+               (up ? 'box-shadow:0 0 6px rgba(63,202,107,0.7);' : '') + '"></span>' +
+        '<span style="font-size:0.7rem;font-weight:600;color:' + labelColor + ';">' + label + '</span>' +
+        (hint ? '<span style="font-size:0.62rem;color:var(--parchment-dim);">' + hint + '</span>' : '') +
+        '<button type="button" class="twitch-bridge-refresh" title="Re-check bridge status"' +
+                ' style="margin-left:auto;padding:0.12rem 0.4rem;background:rgba(255,255,255,0.06);color:var(--parchment-dim);' +
+                       'border:1px solid rgba(255,255,255,0.15);border-radius:4px;font-size:0.6rem;cursor:pointer;">&#8635;</button>' +
+      '</div>'
+    );
+  }
+
+  function _wireBridgeRefresh(container) {
+    var btn = container.querySelector('.twitch-bridge-refresh');
+    if (btn) btn.addEventListener('click', function () { renderInto(container); });
+  }
+
+  function renderPanel(data, container) {
+    var body = container;
     if (!body) return;
 
     var sessionId = getSessionId();
 
     if (!data || !data.connected) {
       body.innerHTML =
+        _bridgeStatusHtml(data) +
         '<p style="margin:0 0 0.65rem;font-size:0.7rem;color:var(--parchment-dim);line-height:1.45;">' +
           'Connect your Twitch channel so viewers can use chat commands, earn loot, and trigger live events.' +
         '</p>' +
@@ -65,6 +110,7 @@
            ' onmouseover="this.style.opacity=\'0.85\'" onmouseout="this.style.opacity=\'1\'">' +
           'Connect Twitch' +
         '</a>';
+      _wireBridgeRefresh(body);
       return;
     }
 
@@ -72,23 +118,26 @@
     var enabled = !!data.enabled;
 
     body.innerHTML =
+      _bridgeStatusHtml(data) +
       '<div style="display:flex;align-items:center;gap:0.45rem;margin-bottom:0.55rem;">' +
         '<span style="font-size:0.72rem;color:#9146ff;font-weight:700;">&#10003; Connected</span>' +
         '<span style="font-size:0.7rem;color:var(--parchment);">#' + escHtml(channel) + '</span>' +
       '</div>' +
       '<label style="display:flex;align-items:center;gap:0.35rem;font-size:0.7rem;' +
              'color:var(--parchment-dim);cursor:pointer;margin-bottom:0.5rem;">' +
-        '<input type="checkbox" id="twitch-enabled-toggle"' + (enabled ? ' checked' : '') +
+        '<input type="checkbox" class="twitch-enabled-toggle"' + (enabled ? ' checked' : '') +
                ' style="accent-color:#9146ff;" />' +
         ' Chat bridge enabled' +
       '</label>' +
-      '<button id="twitch-disconnect-btn"' +
+      '<button type="button" class="twitch-disconnect-btn"' +
               ' style="padding:0.28rem 0.65rem;background:rgba(180,30,30,0.18);color:#e07070;' +
                      'border:1px solid rgba(180,30,30,0.4);border-radius:5px;font-size:0.68rem;cursor:pointer;">' +
         'Disconnect' +
       '</button>';
 
-    document.getElementById('twitch-enabled-toggle').addEventListener('change', function () {
+    _wireBridgeRefresh(body);
+
+    body.querySelector('.twitch-enabled-toggle').addEventListener('change', function () {
       var val = this.checked;
       fetch('/api/twitch/toggle/' + encodeURIComponent(sessionId), {
         method: 'POST',
@@ -98,14 +147,14 @@
       }).catch(function () {});
     });
 
-    document.getElementById('twitch-disconnect-btn').addEventListener('click', function () {
+    body.querySelector('.twitch-disconnect-btn').addEventListener('click', function () {
       if (!confirm('Disconnect Twitch channel #' + channel + '?')) return;
       fetch('/api/twitch/disconnect/' + encodeURIComponent(sessionId), {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({}),
-      }).then(function () { refresh(); }).catch(function () { refresh(); });
+      }).then(function () { renderInto(body); }).catch(function () { renderInto(body); });
     });
 
     // Overlays section
@@ -113,13 +162,14 @@
     overlaySection.style.cssText = 'margin-top:0.75rem;border-top:1px solid rgba(255,255,255,0.1);padding-top:0.65rem;';
     overlaySection.innerHTML =
       '<p style="font-size:0.68rem;color:var(--parchment-dim);margin:0 0 0.45rem;font-weight:600;letter-spacing:0.03em;">OBS Overlays</p>' +
-      '<div id="overlay-urls-wrap" style="font-size:0.66rem;color:var(--parchment-dim);">Loading…</div>';
+      '<div class="overlay-urls-wrap" style="font-size:0.66rem;color:var(--parchment-dim);">Loading…</div>';
     body.appendChild(overlaySection);
+    var overlayWrap = overlaySection.querySelector('.overlay-urls-wrap');
 
     fetch('/api/overlay/urls/' + encodeURIComponent(sessionId), { credentials: 'include' })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (d) {
-        var wrap = document.getElementById('overlay-urls-wrap');
+        var wrap = overlayWrap;
         if (!wrap || !d) return;
         wrap.innerHTML = _buildOverlayRow('Game Overlay', d.game_url, sessionId, 'game', '1920 × 1080 (full canvas, transparent)') +
                          _buildOverlayRow('Arena Panel',  d.arena_url, sessionId, 'arena', '520 × 300 (compact corner panel)');
@@ -169,8 +219,7 @@
         });
       })
       .catch(function () {
-        var wrap = document.getElementById('overlay-urls-wrap');
-        if (wrap) wrap.textContent = 'Could not load overlay URLs.';
+        if (overlayWrap) overlayWrap.textContent = 'Could not load overlay URLs.';
       });
 
     // DM tools: persistence mode + chat character roster
@@ -245,29 +294,31 @@
       '<p style="font-size:0.68rem;color:var(--parchment-dim);margin:0 0 0.45rem;font-weight:600;letter-spacing:0.03em;">Chat Characters</p>' +
       '<label style="display:flex;align-items:center;gap:0.4rem;font-size:0.66rem;color:var(--parchment-dim);margin-bottom:0.5rem;">' +
         'Persist between sessions:' +
-        '<select id="twitch-persist-mode" style="font-size:0.66rem;background:rgba(0,0,0,0.3);color:var(--parchment);' +
+        '<select class="twitch-persist-mode" style="font-size:0.66rem;background:rgba(0,0,0,0.3);color:var(--parchment);' +
                 'border:1px solid rgba(255,255,255,0.15);border-radius:4px;padding:0.15rem 0.3rem;">' +
           '<option value="everything">Everything</option>' +
           '<option value="stats">Stats only</option>' +
           '<option value="nothing">Nothing</option>' +
         '</select>' +
       '</label>' +
-      '<button id="twitch-roster-refresh" style="padding:0.24rem 0.6rem;background:rgba(201,168,76,0.14);color:#c9a84c;' +
+      '<button type="button" class="twitch-roster-refresh" style="padding:0.24rem 0.6rem;background:rgba(201,168,76,0.14);color:#c9a84c;' +
               'border:1px solid rgba(201,168,76,0.35);border-radius:5px;font-size:0.66rem;cursor:pointer;">View chat characters</button>' +
-      '<div id="twitch-roster-wrap" style="margin-top:0.45rem;font-size:0.64rem;color:var(--parchment-dim);"></div>';
+      '<div class="twitch-roster-wrap" style="margin-top:0.45rem;font-size:0.64rem;color:var(--parchment-dim);"></div>';
     body.appendChild(section);
 
-    var modeSel = section.querySelector('#twitch-persist-mode');
+    var modeSel = section.querySelector('.twitch-persist-mode');
     modeSel.value = persistenceMode || 'everything';
     modeSel.addEventListener('change', function () {
       _sendWS({ type: 'dm_chat_persistence_mode', payload: { mode: modeSel.value } });
     });
 
-    section.querySelector('#twitch-roster-refresh').addEventListener('click', _refreshRoster);
+    var rosterWrap = section.querySelector('.twitch-roster-wrap');
+    section.querySelector('.twitch-roster-refresh').addEventListener('click', function () {
+      _refreshRoster(rosterWrap);
+    });
   }
 
-  function _refreshRoster() {
-    var wrap = document.getElementById('twitch-roster-wrap');
+  function _refreshRoster(wrap) {
     if (!wrap) return;
     wrap.textContent = 'Loading…';
     var pending = _awaitWS('dm_chat_participants_result', 4000);
@@ -305,7 +356,7 @@
           _sendWS({ type: 'dm_chat_participant_update', payload: {
             twitch_username: cp.twitch_username, character_name: newName,
           } });
-          setTimeout(_refreshRoster, 400);
+          setTimeout(function () { _refreshRoster(wrap); }, 400);
         });
         row.querySelector('.cp-reset').addEventListener('click', function () {
           var scope = prompt(
@@ -319,12 +370,18 @@
           _sendWS({ type: 'dm_chat_participant_reset', payload: {
             twitch_username: cp.twitch_username, scope: scope,
           } });
-          setTimeout(_refreshRoster, 400);
+          setTimeout(function () { _refreshRoster(wrap); }, 400);
         });
         wrap.appendChild(row);
       });
     });
   }
+
+  // Public API — reused by the Stream mode panel (dm_context_render.js).
+  window.TwitchSettingsPanel = Object.freeze({
+    renderInto: renderInto,
+    refresh: refresh,
+  });
 
   document.addEventListener('DOMContentLoaded', function () {
     // Re-check each time the settings flyout is opened.

@@ -39,6 +39,11 @@
       context: ['connected-viewers', 'grants', 'approvals', 'cooldowns', 'feedback'],
     },
     {
+      id: 'stream',
+      label: 'Stream',
+      context: ['twitch-connection', 'chat-bridge-status', 'overlay-urls'],
+    },
+    {
       id: 'debug',
       label: 'Debug',
       context: ['readiness', 'payload', 'reconnect', 'websocket', 'sync-diagnostics'],

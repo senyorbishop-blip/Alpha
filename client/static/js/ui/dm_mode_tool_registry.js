@@ -118,6 +118,18 @@
       ]),
       keepOut: Object.freeze(['map-editor-tools', 'player-character-sheet', 'debug-diagnostics']),
     }),
+    stream: Object.freeze({
+      label: 'Stream',
+      purpose: 'Twitch integration: channel connection, chat bridge status, and OBS overlay URLs.',
+      primaryTools: Object.freeze([
+        'twitch-connection',
+        'chat-bridge-status',
+        'chat-bridge-toggle',
+        'overlay-urls',
+        'chat-character-roster',
+      ]),
+      keepOut: Object.freeze(['map-editor-tools', 'initiative-order', 'debug-diagnostics']),
+    }),
     debug: Object.freeze({
       label: 'Debug',
       purpose: 'Troubleshooting only. Closed by default.',

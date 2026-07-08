@@ -298,10 +298,16 @@ async def twitch_status(session_id: str, request: Request):
     session = get_session(session_id)
     persistence_mode = str(getattr(session, "chat_persistence_mode", "everything") or "everything")
 
+    # Whether the chat bridge service currently holds a live WebSocket to this
+    # session — tells the DM instantly whether !join etc. will work.
+    from server.connections import manager
+    bridge_connected = manager.is_connected(session_id, "chat_bridge")
+
     if not row or not row.get("twitch_channel"):
         return JSONResponse(content={
             "connected": False, "channel": None, "enabled": True,
             "persistence_mode": persistence_mode,
+            "bridge_connected": bridge_connected,
         })
 
     return JSONResponse(content={
@@ -309,6 +315,7 @@ async def twitch_status(session_id: str, request: Request):
         "channel":   row["twitch_channel"],
         "enabled":   bool(row.get("twitch_chat_enabled", 1)),
         "persistence_mode": persistence_mode,
+        "bridge_connected": bridge_connected,
     })
 
 
