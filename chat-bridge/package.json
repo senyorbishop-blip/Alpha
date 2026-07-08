@@ -5,6 +5,7 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
+    "mock": "node src/index.js --mock",
     "dev": "node --watch src/index.js",
     "test": "jest --testPathPattern=tests/"
   },

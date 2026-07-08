@@ -14,6 +14,7 @@ const { LootRoller }    = require('./lootRoller');
 const { EventSubClient } = require('./eventSubClient');
 const { sanitize, validateUsername } = require('./sanitizer');
 const { Arena }         = require('./arena');
+const { MockTwitchClient, MockEventSubClient, startMockRepl } = require('./mockChat');
 
 // ---------------------------------------------------------------------------
 // Logger
@@ -45,6 +46,11 @@ const responses  = loadJson('config/responses.json')   ?? {};
 // ---------------------------------------------------------------------------
 // Env validation
 // ---------------------------------------------------------------------------
+// Mock chat mode: no Twitch account/tokens/internet needed — chat is simulated
+// on stdin and bot replies print to the console. Only the game-server vars are
+// required. Activate with MOCK_CHAT=true or `npm run mock`.
+const MOCK_CHAT = /^(1|true|yes)$/i.test(process.env.MOCK_CHAT ?? '') || process.argv.includes('--mock');
+
 const REQUIRED_ENV = ['GAME_SERVER_WS_URL', 'GAME_SESSION_ID', 'CHAT_BRIDGE_TOKEN'];
 for (const key of REQUIRED_ENV) {
   if (!process.env[key]) {
@@ -189,40 +195,47 @@ async function main() {
   let broadcasterId = process.env.TWITCH_BROADCASTER_ID ?? '';
   let clientId = TWITCH_CLIENT_ID ?? '';
 
-  try {
-    const creds = await fetchCampaignCredentials();
-    if (creds?.channel && creds?.access_token) {
-      twitchChannel    = creds.channel;
-      twitchOAuthToken = `oauth:${creds.access_token}`;
-      broadcasterId    = creds.channel_id || broadcasterId;
-      logger.info(`[ChatBridge] Using per-campaign Twitch credentials for channel: ${twitchChannel}`);
-    } else {
-      logger.info('[ChatBridge] No per-campaign credentials found; using env-var credentials.');
+  if (MOCK_CHAT) {
+    // Mock mode: no Twitch connection at all — chat is simulated on stdin.
+    twitchChannel = twitchChannel || 'mock';
+    twitchClient = new MockTwitchClient({ channel: `#${twitchChannel.replace(/^#/, '')}`, logger });
+    await twitchClient.connect();
+  } else {
+    try {
+      const creds = await fetchCampaignCredentials();
+      if (creds?.channel && creds?.access_token) {
+        twitchChannel    = creds.channel;
+        twitchOAuthToken = `oauth:${creds.access_token}`;
+        broadcasterId    = creds.channel_id || broadcasterId;
+        logger.info(`[ChatBridge] Using per-campaign Twitch credentials for channel: ${twitchChannel}`);
+      } else {
+        logger.info('[ChatBridge] No per-campaign credentials found; using env-var credentials.');
+      }
+    } catch (err) {
+      logger.warn('[ChatBridge] Could not fetch campaign credentials:', err.message);
     }
-  } catch (err) {
-    logger.warn('[ChatBridge] Could not fetch campaign credentials:', err.message);
+
+    if (!twitchChannel || !twitchOAuthToken) {
+      logger.error('[ChatBridge] No Twitch credentials available (set TWITCH_CHANNEL + TWITCH_OAUTH_TOKEN or connect via the DM UI).');
+      process.exit(1);
+    }
+
+    if (!twitchBotUsername) {
+      // Default bot username to channel name when connecting with per-campaign tokens
+      twitchBotUsername = twitchChannel.replace(/^#/, '');
+      logger.warn(`[ChatBridge] TWITCH_BOT_USERNAME not set; defaulting to channel name: ${twitchBotUsername}`);
+    }
+
+    twitchClient = new TwitchClient({
+      username: twitchBotUsername,
+      oauthToken: twitchOAuthToken,
+      channel: twitchChannel,
+      logger,
+    });
+
+    await twitchClient.connect();
+    logger.info('[ChatBridge] Twitch IRC client connected');
   }
-
-  if (!twitchChannel || !twitchOAuthToken) {
-    logger.error('[ChatBridge] No Twitch credentials available (set TWITCH_CHANNEL + TWITCH_OAUTH_TOKEN or connect via the DM UI).');
-    process.exit(1);
-  }
-
-  if (!twitchBotUsername) {
-    // Default bot username to channel name when connecting with per-campaign tokens
-    twitchBotUsername = twitchChannel.replace(/^#/, '');
-    logger.warn(`[ChatBridge] TWITCH_BOT_USERNAME not set; defaulting to channel name: ${twitchBotUsername}`);
-  }
-
-  twitchClient = new TwitchClient({
-    username: twitchBotUsername,
-    oauthToken: twitchOAuthToken,
-    channel: twitchChannel,
-    logger,
-  });
-
-  await twitchClient.connect();
-  logger.info('[ChatBridge] Twitch IRC client connected');
 
   const channel = `#${twitchChannel.replace(/^#/, '')}`;
 
@@ -292,16 +305,22 @@ async function main() {
   });
 
   // ---------------------------------------------------------------------------
-  // EventSub (optional — requires clientId and broadcasterId)
+  // EventSub (optional — requires clientId and broadcasterId).
+  // In mock mode a MockEventSubClient is used so /sub /giftsub /bits /raid in
+  // the REPL fire the exact same handlers as real EventSub events.
   // ---------------------------------------------------------------------------
-  if (clientId && broadcasterId) {
+  if (MOCK_CHAT) {
+    eventSubClient = new MockEventSubClient({ logger });
+  } else if (clientId && broadcasterId) {
     eventSubClient = new EventSubClient({
       clientId,
       oauthToken: twitchOAuthToken.replace(/^oauth:/, ''),
       broadcasterId,
       logger,
     });
+  }
 
+  if (eventSubClient) {
     eventSubClient.on('sub', async ({ username, displayName, months, gifted, gifterDisplay }) => {
       const valid = validateUsername(username);
       if (!valid) return;
@@ -342,6 +361,10 @@ async function main() {
     logger.info('[ChatBridge] EventSub client started');
   } else {
     logger.warn('[ChatBridge] EventSub disabled — set TWITCH_CLIENT_ID and TWITCH_BROADCASTER_ID (or connect via DM UI) to enable sub/bits/raid loot');
+  }
+
+  if (MOCK_CHAT) {
+    startMockRepl({ twitchClient, eventSubClient, logger, onQuit: shutdown });
   }
 
   // Handle server-side kill-switch events

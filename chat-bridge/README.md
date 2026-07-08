@@ -4,6 +4,41 @@ Connects Twitch chat and EventSub events to the Tavern Tabletop game server so s
 
 ---
 
+## Quickstart: Mock Chat Mode (recommended first test)
+
+You can test the **entire pipeline** — commands, loot, rate limiting, EventSub rewards — with **no Twitch account, no tokens, and no internet**. Only the game server needs to be running.
+
+```bash
+cd chat-bridge
+npm install
+
+# Only the game-server vars are needed — nothing Twitch-related:
+export GAME_SERVER_WS_URL=ws://localhost:8000
+export GAME_SESSION_ID=<session id from the DM's browser URL>
+export CHAT_BRIDGE_TOKEN=<must match the game server's CHAT_BRIDGE_TOKEN>
+
+npm run mock        # or: MOCK_CHAT=true npm start
+```
+
+You get an interactive prompt that simulates Twitch chat. Type `<username>: <message>` to speak as a viewer; a bare message comes from `testuser`. Bot replies that would go to Twitch chat print as `[BOT→chat]`.
+
+```
+mock> alice: !join
+[BOT→chat] Alice has entered the tavern! Type !inventory to see your items.
+mock> !inventory
+mock> /sub alice          # simulate a subscription (same handler as real EventSub)
+mock> /giftsub bob 5      # bob gifts 5 subs
+mock> /bits carol 500     # carol cheers 500 bits
+mock> /raid dan 20        # dan raids with 20 viewers
+mock> /spam 25            # 25 rapid commands from fake users — exercises rate limiting
+mock> /help
+mock> /quit
+```
+
+Everything routes through the exact same command parser and EventSub handler paths as real traffic — only the Twitch transport is simulated. When it all works here, follow the sections below to connect a real channel.
+
+---
+
 ## Architecture
 
 ```
