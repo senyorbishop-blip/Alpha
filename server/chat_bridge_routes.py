@@ -11,6 +11,7 @@ startup and re-auth before expiry.
 from __future__ import annotations
 
 import os
+import secrets
 import time
 import logging
 
@@ -50,7 +51,7 @@ async def chat_bridge_auth(request: Request):
         return JSONResponse(status_code=400, content={"error": "Invalid JSON body."})
 
     provided = str(body.get("token") or "").strip()
-    if not provided or provided != bridge_token:
+    if not provided or not secrets.compare_digest(provided, bridge_token):
         logger.warning("[chat_bridge] auth attempt with invalid token from %s", request.client.host if request.client else "unknown")
         return JSONResponse(status_code=401, content={"error": "Invalid bridge token."})
 
@@ -86,7 +87,7 @@ async def chat_bridge_credentials(session_id: str, request: Request):
         return JSONResponse(status_code=503, content={"error": "Chat bridge not configured."})
 
     provided = (request.headers.get("x-bridge-token") or "").strip()
-    if not provided or provided != bridge_token:
+    if not provided or not secrets.compare_digest(provided, bridge_token):
         logger.warning("[chat_bridge] credentials request with invalid token from %s", request.client.host if request.client else "unknown")
         return JSONResponse(status_code=401, content={"error": "Invalid bridge token."})
 
