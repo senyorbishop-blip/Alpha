@@ -9,7 +9,8 @@ import logging
 logger = logging.getLogger(__name__)
 from server.session import Session, User, normalize_profile_owner_key, set_assistant_dm_permissions, assistant_dm_has_scope, grant_temp_permission, ACTIVE_PROFILE_ID_KEY_LIMIT, set_player_gold_for_user, _inventory_owner_key, bump_character_hydration_revisions, build_quick_actions_sync_payload
 from server.character.profile_sanitize import strip_runtime_fields
-from server.character.profile_assets import sanitize_profiles_for_websocket
+from server.character.profile_assets import sanitize_profile_for_websocket
+from server.character.profile_stub import build_char_profile_stub_list, char_profile_revision
 from server.quest_library import (
     build_session_quest_from_template,
     get_quest_template,
@@ -483,8 +484,11 @@ async def _send_char_profiles(session: Session, user_id: str):
     if user:
         all_profiles, owner_key, mine = _get_char_profiles_for_user(session, user)
         profiles = mine
+    # Stubs only: the full body is never pushed. Clients holding a cached body
+    # compare each stub's revision and re-fetch via char_profile_fetch when it
+    # changed (see handle_char_profile_fetch).
     await manager.send_to(session.id, user_id, {"type": "char_profiles_sync", "payload": {
-        "profiles": sanitize_profiles_for_websocket(profiles),
+        "profiles": build_char_profile_stub_list(profiles),
         "active_profile_id": str((getattr(session, "active_char_profiles", {}) or {}).get(user_id) or ""),
         "character_runtime_revision": int(getattr(session, "character_runtime_revision", 0) or 0),
         "spell_manifest_revision": int(getattr(session, "spell_manifest_revision", 0) or 0),
@@ -492,6 +496,65 @@ async def _send_char_profiles(session: Session, user_id: str):
     }})
     if user and getattr(user, "role", "") == "player":
         await manager.send_to(session.id, user_id, {"type": "quick_actions_sync", "payload": build_quick_actions_sync_payload(session, user_id)})
+
+
+def _find_char_profile_for_fetch(session: Session, user: User, profile_id: str):
+    """Locate a profile this user may fetch in full.
+
+    Access must EXACTLY mirror state-sync visibility (to_state_dict_for_role):
+    the DM sees every profile in the session; a player sees only their own
+    owner bucket; every other role (viewer, chat_bridge, overlay,
+    assistant_dm) receives no profiles from sync and therefore may not fetch
+    any. The DM check is the session role established by the authenticated
+    connect — the WS counterpart of request_has_dm_access — never a raw
+    dm_id/ownership comparison.
+    """
+    role = str(getattr(user, "role", "") or "").strip().lower()
+    if role == "dm":
+        for owner_key, rows in (dict(getattr(session, "char_profiles", {}) or {})).items():
+            if not isinstance(rows, list):
+                continue
+            for row in rows:
+                if isinstance(row, dict) and str(row.get("id") or "").strip() == profile_id:
+                    return row, str(owner_key)
+        return None, ""
+    if role == "player":
+        _, owner_key, mine = _get_char_profiles_for_user(session, user)
+        for row in mine:
+            if isinstance(row, dict) and str(row.get("id") or "").strip() == profile_id:
+                return row, owner_key
+        return None, ""
+    return None, ""
+
+
+async def handle_char_profile_fetch(payload: dict, session: Session, user: User):
+    """On-demand full-profile fetch (sync itself only carries stubs).
+
+    Always answers with char_profile_response so a denied/missing profile
+    surfaces as a visible client error instead of a silently empty sheet.
+    """
+    profile_id = str((payload or {}).get("id") or "").strip()[:ACTIVE_PROFILE_ID_KEY_LIMIT]
+
+    async def _respond_error(error: str):
+        await manager.send_to(session.id, user.id, {"type": "char_profile_response", "payload": {
+            "ok": False, "id": profile_id, "error": error,
+        }})
+
+    if not profile_id:
+        return await _respond_error("Missing profile id.")
+    role = str(getattr(user, "role", "") or "").strip().lower()
+    if role not in {"dm", "player"}:
+        return await _respond_error("You don't have permission to load character profiles.")
+    profile, owner_key = _find_char_profile_for_fetch(session, user, profile_id)
+    if not isinstance(profile, dict):
+        return await _respond_error("Character profile not found.")
+    await manager.send_to(session.id, user.id, {"type": "char_profile_response", "payload": {
+        "ok": True,
+        "id": profile_id,
+        "owner_key": owner_key,
+        "revision": char_profile_revision(profile),
+        "profile": sanitize_profile_for_websocket(profile),
+    }})
 
 
 async def handle_journal_upsert(payload: dict, session: Session, user: User):

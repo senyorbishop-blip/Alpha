@@ -164,9 +164,17 @@
     const charProfiles = env.getCharProfiles();
     const selectedProfile = charProfiles.find(p => String(p?.id || '') === String(profileId || '')) || null;
     const activeDoc = env.getActiveNativeCharacterDocument();
+    if (!activeDoc && selectedProfile && selectedProfile.stub && typeof global.ensureCharProfileBody === 'function') {
+      // Sync only shipped a profile stub; fetch the body, then re-open.
+      env.showToast('Loading character…');
+      global.ensureCharProfileBody(profileId, function (full) {
+        if (full) openCharacterLevelupPlanner(env);
+      });
+      return;
+    }
     const characterDocument = (activeDoc && typeof activeDoc === 'object')
       ? JSON.parse(JSON.stringify(activeDoc))
-      : (selectedProfile && selectedProfile.nativeCharacter && typeof selectedProfile.nativeCharacter === 'object'
+      : (selectedProfile && !selectedProfile.stub && selectedProfile.nativeCharacter && typeof selectedProfile.nativeCharacter === 'object'
         ? JSON.parse(JSON.stringify(selectedProfile.nativeCharacter))
         : null);
 

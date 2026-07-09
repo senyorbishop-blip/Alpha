@@ -225,6 +225,7 @@ PLAYER_KNOWN_GAMEPLAY_MESSAGE_TYPES = frozenset({
     "char_profile_upsert",
     "char_profile_select",
     "char_profile_delete",
+    "char_profile_fetch",
     "poi_create",
     "poi_update",
     "poi_delete",

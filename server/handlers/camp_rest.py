@@ -10,7 +10,7 @@ at any time.  No heavy mechanics — this is pure atmosphere and interaction.
 import time
 from server.session import Session, User, normalize_profile_owner_key, build_quick_actions_sync_payload, bump_character_hydration_revisions
 from server.character.summon_runtime import prune_expired_temporary_summons
-from server.character.profile_assets import sanitize_profiles_for_websocket
+from server.character.profile_stub import build_char_profile_stub_list
 from server.handlers.common import (
     manager, save_campaign_async,
     _apply_heal, _broadcast_token_state_sync, _sync_combatant_token_state,
@@ -193,7 +193,7 @@ async def _broadcast_character_and_quick_actions(session: Session):
             if isinstance(profiles.get(key), list):
                 mine = profiles.get(key); break
         await manager.send_to(session.id, uid, {"type": "char_profiles_sync", "payload": {
-            "profiles": sanitize_profiles_for_websocket(mine),
+            "profiles": build_char_profile_stub_list(mine),
             "active_profile_id": _active_profile_id(session, uid),
             "character_runtime_revision": int(getattr(session, "character_runtime_revision", 0) or 0),
             "spell_manifest_revision": int(getattr(session, "spell_manifest_revision", 0) or 0),
