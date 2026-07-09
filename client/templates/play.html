@@ -21391,7 +21391,14 @@ function ctxToggleHidden() {
 }
 
 function ctxClose() {
-  document.getElementById('ctx-menu').classList.remove('open');
+  const menu = document.getElementById('ctx-menu');
+  const wasOpen = !!(menu && menu.classList.contains('open'));
+  if (menu) menu.classList.remove('open');
+  // The document-level outside-click handler calls ctxClose() on EVERY page
+  // click. When no menu was open and no token context is set there is nothing
+  // to restore — skip the right-panel rebuild, which would otherwise wipe
+  // in-panel UI state (expanded rows, unsaved checkboxes) on any click.
+  if (!wasOpen && !ctxToken) return;
   ctxToken = null;
   refreshRightPanelContextUI();
 }
