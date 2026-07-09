@@ -72,6 +72,37 @@ async def chat_bridge_status(request: Request):
     return JSONResponse(content={"configured": configured})
 
 
+@router.get("/api/chat-bridge/status/{session_id}")
+async def chat_bridge_session_status(session_id: str, request: Request):
+    """Supervisor status for this session's bridge, including the ring buffer
+    of recent bridge output. DM only."""
+    from server.twitch_oauth_routes import _resolve_dm
+    if not _resolve_dm(request, session_id):
+        return JSONResponse(status_code=403, content={"error": "Forbidden."})
+
+    from server.chat_bridge_supervisor import bridge_supervisor
+    status = bridge_supervisor.status(session_id)
+    status["configured"] = bool(_get_bridge_token())
+    return JSONResponse(content=status)
+
+
+@router.post("/api/chat-bridge/restart/{session_id}")
+async def chat_bridge_restart(session_id: str, request: Request):
+    """DM-requested bridge restart (also clears a 'failed' state)."""
+    from server.twitch_oauth_routes import _resolve_dm
+    if not _resolve_dm(request, session_id):
+        return JSONResponse(status_code=403, content={"error": "Forbidden."})
+
+    from server.chat_bridge_supervisor import bridge_supervisor
+    status = await bridge_supervisor.restart(session_id)
+    ok = status.get("state") in ("starting", "running")
+    if not ok and not status.get("last_error"):
+        status["last_error"] = (
+            "Bridge did not start — connect a Twitch channel and enable the chat bridge first."
+        )
+    return JSONResponse(content={"ok": ok, **status})
+
+
 @router.get("/api/chat-bridge/credentials/{session_id}")
 async def chat_bridge_credentials(session_id: str, request: Request):
     """Return decrypted Twitch credentials for a campaign.

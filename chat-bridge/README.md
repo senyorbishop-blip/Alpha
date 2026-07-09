@@ -173,6 +173,29 @@ Edit `config/commands.json`. Currently supported actions are `join`, `leave`, `i
 
 ## 7. Running the Bridge
 
+### Automatic (default)
+
+You normally don't need to start the bridge yourself. The game server
+supervises it as a child process: as soon as a session has a connected Twitch
+channel and "Chat bridge enabled" is on in the Stream panel, the server runs
+`node src/index.js` in this folder, restarts it with backoff if it crashes,
+and stops it when the bridge is toggled off, Twitch is disconnected, or the
+server shuts down. The Stream panel shows the live status
+(running / starting / failed / stopped), the last error, a recent-log view,
+and a "Restart bridge" button.
+
+The bridge still reads this folder's `.env` for its Twitch bot identity
+(`TWITCH_BOT_USERNAME`, `TWITCH_OAUTH_TOKEN`, …), but `GAME_SERVER_WS_URL`,
+`GAME_SESSION_ID`, and `CHAT_BRIDGE_TOKEN` are injected by the server, so
+they never need to be synced by hand. Node.js 18+ must be installed and on
+PATH (or set `CHAT_BRIDGE_NODE` in the server environment to the node
+executable). Run `npm install` here once so the dependencies exist.
+
+### Manual (development)
+
+Running the bridge by hand still works — the server skips auto-spawning when
+a bridge for the session is already connected:
+
 ```bash
 npm install
 npm start

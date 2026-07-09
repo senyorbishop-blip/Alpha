@@ -229,6 +229,12 @@ async def lifespan(app):
             _tts_startup_error = str(_tts_err)
             logger.warning("[TTS] startup failed (non-fatal): %s", _tts_err)
     yield
+    # Clean shutdown: terminate any supervised chat-bridge child processes.
+    try:
+        from server.chat_bridge_supervisor import bridge_supervisor
+        await bridge_supervisor.shutdown_all()
+    except Exception:
+        logger.exception("[chat-bridge] supervisor shutdown failed")
 
 app = FastAPI(title="D&D Tabletop Phase 1", lifespan=lifespan)
 
@@ -316,10 +322,11 @@ app.add_middleware(
     cookie_samesite=APP_CONFIG.auth_cookie_samesite,
     # The Twitch Extension EBS is called cross-origin from Twitch's hosted
     # iframe and is authenticated by Twitch-signed Extension JWTs, so it cannot
-    # participate in the double-submit cookie scheme. The chat-bridge endpoints
-    # are machine-to-machine, authenticated by the CHAT_BRIDGE_TOKEN shared
-    # secret — no browser cookies are involved, so CSRF does not apply.
-    exempt_prefixes=("/api/twitch/ext/", "/api/chat-bridge/"),
+    # participate in the double-submit cookie scheme.
+    # The chat-bridge auth endpoint is a service-to-service call from the Node
+    # bridge process (no browser, no cookies) authenticated by the shared
+    # CHAT_BRIDGE_TOKEN secret, so it cannot carry the CSRF cookie/header pair.
+    exempt_prefixes=("/api/twitch/ext/", "/api/chat-bridge/auth"),
 )
 
 
@@ -749,6 +756,16 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, user_id: str
         client_socket_id=client_socket_id, reason=reason, user_agent=_user_agent,
     )
     user.connected = True
+
+    # The session is live: auto-start the supervised chat bridge if this
+    # campaign has a connected Twitch channel with the chat bridge enabled.
+    # (No-op otherwise; bridge failures never propagate to the game server.)
+    if user.role == 'dm':
+        try:
+            from server.chat_bridge_supervisor import bridge_supervisor
+            asyncio.create_task(bridge_supervisor.ensure_started(session_id))
+        except Exception:
+            logger.exception("[chat-bridge] auto-start scheduling failed")
 
     # Send full state on connect (DM gets POI dm_notes, others don't)
     state = session.to_state_dict_for_role(user.role, user_id)

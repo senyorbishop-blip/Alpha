@@ -15,6 +15,7 @@ connect-time.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -289,6 +290,10 @@ async def twitch_callback(request: Request, code: str = "", state: str = "", err
     _save_twitch_tokens(session_id, channel, channel_id, access_token, refresh_token, expires_at)
     logger.info("[twitch_oauth] connected channel=%s session=%s", channel, session_id)
 
+    # A connected channel + enabled toggle means the bridge should be running.
+    from server.chat_bridge_supervisor import bridge_supervisor
+    asyncio.create_task(bridge_supervisor.ensure_started(session_id, force=True))
+
     # Redirect DM back to the play page
     play_url = f"/play/{session_id}?twitch_connected=1"
     return RedirectResponse(url=play_url)
@@ -309,19 +314,31 @@ async def twitch_status(session_id: str, request: Request):
     from server.connections import manager
     bridge_connected = manager.is_connected(session_id, "chat_bridge")
 
+    from server.chat_bridge_supervisor import bridge_supervisor
+    bridge = bridge_supervisor.status(session_id)
+
     if not row or not row.get("twitch_channel"):
         return JSONResponse(content={
             "connected": False, "channel": None, "enabled": True,
             "persistence_mode": persistence_mode,
             "bridge_connected": bridge_connected,
+            "bridge": bridge,
         })
+
+    enabled = bool(row.get("twitch_chat_enabled", 1))
+    if enabled:
+        # Self-healing: if the bridge should be running (e.g. after a server
+        # restart) kick it off when the DM opens the panel. No-op when it is
+        # already running, externally connected, or marked failed.
+        asyncio.create_task(bridge_supervisor.ensure_started(session_id))
 
     return JSONResponse(content={
         "connected": True,
         "channel":   row["twitch_channel"],
-        "enabled":   bool(row.get("twitch_chat_enabled", 1)),
+        "enabled":   enabled,
         "persistence_mode": persistence_mode,
         "bridge_connected": bridge_connected,
+        "bridge": bridge,
     })
 
 
@@ -346,6 +363,9 @@ async def twitch_disconnect(session_id: str, request: Request):
 
     _clear_twitch_tokens(session_id)
     logger.info("[twitch_oauth] disconnected session=%s", session_id)
+
+    from server.chat_bridge_supervisor import bridge_supervisor
+    asyncio.create_task(bridge_supervisor.stop(session_id, reason="Twitch disconnected"))
     return JSONResponse(content={"ok": True})
 
 
@@ -385,6 +405,13 @@ async def twitch_toggle(session_id: str, request: Request):
             })
         except Exception:
             logger.exception("Failed to broadcast chat_bridge_status after toggle")
+
+    # Toggle drives the supervised bridge process: on → spawn, off → terminate.
+    from server.chat_bridge_supervisor import bridge_supervisor
+    if enabled:
+        asyncio.create_task(bridge_supervisor.ensure_started(session_id, force=True))
+    else:
+        asyncio.create_task(bridge_supervisor.stop(session_id, reason="chat bridge disabled by DM"))
 
     return JSONResponse(content={"ok": True, "enabled": enabled})
 
