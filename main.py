@@ -316,8 +316,10 @@ app.add_middleware(
     cookie_samesite=APP_CONFIG.auth_cookie_samesite,
     # The Twitch Extension EBS is called cross-origin from Twitch's hosted
     # iframe and is authenticated by Twitch-signed Extension JWTs, so it cannot
-    # participate in the double-submit cookie scheme.
-    exempt_prefixes=("/api/twitch/ext/",),
+    # participate in the double-submit cookie scheme. The chat-bridge endpoints
+    # are machine-to-machine, authenticated by the CHAT_BRIDGE_TOKEN shared
+    # secret — no browser cookies are involved, so CSRF does not apply.
+    exempt_prefixes=("/api/twitch/ext/", "/api/chat-bridge/"),
 )
 
 
