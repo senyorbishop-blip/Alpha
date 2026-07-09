@@ -74,12 +74,11 @@ The bridge connects to the game server as a **privileged service account** (`rol
 
 ## 2. Get a User Access Token (for EventSub)
 
-EventSub subscriptions for sub/bits/raid require a **user access token** for the broadcaster's account (not the bot account) with the following scopes:
+EventSub subscriptions for sub/bits require a **user access token** for the broadcaster's account (not the bot account) with the following scopes (raid notifications need no scope — the `channel.raid` EventSub topic works without authorization):
 
 ```
 channel:read:subscriptions
 bits:read
-channel:read:raids
 ```
 
 Steps:
@@ -91,7 +90,7 @@ Steps:
 
 2. Generate a user token using the [Twitch CLI](https://dev.twitch.tv/docs/cli) or the Token Generator:
    ```bash
-   twitch token -u -s 'channel:read:subscriptions bits:read channel:read:raids'
+   twitch token -u -s 'channel:read:subscriptions bits:read'
    ```
    Copy the resulting **User Access Token** → set as `TWITCH_OAUTH_TOKEN`.
 
