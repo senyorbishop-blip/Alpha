@@ -27,6 +27,93 @@
       .replace(/"/g, '&quot;');
   }
 
+  // ── Collapsible rows ─────────────────────────────────────────────────────
+  // Explicit expand/collapse instead of native <details>: the DM rail's shell
+  // interfered with native summary toggling, so rows showed an arrow that did
+  // nothing. The whole header row is clickable (and keyboard-operable).
+
+  // The whole panel is re-rendered by the DM rail on context refreshes, so
+  // remember which rows are open (keyed by data-collapse-key) and restore
+  // their state on rebuild.
+  var _openCollapseKeys = {};
+
+  function _setCollapseOpen(header, open) {
+    var body = header.nextElementSibling;
+    if (!body || !body.classList.contains('tw-collapse-body')) return;
+    body.style.display = open ? '' : 'none';
+    header.setAttribute('aria-expanded', String(open));
+    var arrow = header.querySelector('.tw-collapse-arrow');
+    if (arrow) arrow.style.transform = open ? 'rotate(90deg)' : '';
+    var key = header.dataset.collapseKey;
+    if (key) {
+      if (open) _openCollapseKeys[key] = true;
+      else delete _openCollapseKeys[key];
+    }
+  }
+
+  function _toggleCollapse(header) {
+    var body = header.nextElementSibling;
+    if (!body || !body.classList.contains('tw-collapse-body')) return;
+    _setCollapseOpen(header, body.style.display === 'none');
+  }
+
+  /**
+   * Bind toggle handlers to every .tw-collapse-header under root (idempotent)
+   * and restore each keyed row's remembered open state.
+   */
+  function _wireCollapsibles(root) {
+    if (!root || !root.querySelectorAll) return;
+    root.querySelectorAll('.tw-collapse-header').forEach(function (header) {
+      if (header.dataset.collapseBound !== '1') {
+        header.dataset.collapseBound = '1';
+        header.addEventListener('click', function (e) {
+          e.preventDefault();
+          _toggleCollapse(header);
+        });
+        header.addEventListener('keydown', function (e) {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            _toggleCollapse(header);
+          }
+        });
+      }
+      var key = header.dataset.collapseKey;
+      if (key && _openCollapseKeys[key]) _setCollapseOpen(header, true);
+    });
+  }
+
+  var _COLLAPSE_HEADER_CSS =
+    'display:flex;align-items:center;gap:0.35rem;cursor:pointer;user-select:none;padding:0.15rem 0;';
+  var _COLLAPSE_ARROW_HTML =
+    '<span class="tw-collapse-arrow" style="font-size:0.5rem;color:var(--parchment-dim);' +
+    'transition:transform 0.12s;flex:none;">&#9654;</span>';
+
+  /**
+   * Build a collapsed row: { root, header, content }. labelHtml must already
+   * be escaped by the caller; key identifies the row so its open state
+   * survives panel re-renders.
+   */
+  function _makeCollapsible(labelHtml, key) {
+    var root = document.createElement('div');
+    root.className = 'tw-collapse';
+    root.style.cssText = 'margin-bottom:0.35rem;';
+    var header = document.createElement('div');
+    header.className = 'tw-collapse-header';
+    header.setAttribute('role', 'button');
+    header.setAttribute('tabindex', '0');
+    header.setAttribute('aria-expanded', 'false');
+    if (key) header.dataset.collapseKey = key;
+    header.style.cssText = _COLLAPSE_HEADER_CSS + 'font-size:0.66rem;color:var(--parchment);';
+    header.innerHTML = _COLLAPSE_ARROW_HTML + '<span>' + labelHtml + '</span>';
+    var content = document.createElement('div');
+    content.className = 'tw-collapse-body';
+    content.style.display = 'none';
+    root.appendChild(header);
+    root.appendChild(content);
+    _wireCollapsibles(root);
+    return { root: root, header: header, content: content };
+  }
+
   function init() {
     var section = document.getElementById('twitch-settings-section');
     if (!section) return;
@@ -116,14 +203,21 @@
     var logHtml = '';
     if (bridge && bridge.log && bridge.log.length) {
       logHtml =
-        '<details style="margin:-0.25rem 0 0.55rem;">' +
-          '<summary style="font-size:0.6rem;color:var(--parchment-dim);cursor:pointer;">Recent bridge log</summary>' +
-          '<pre style="margin:0.25rem 0 0;max-height:130px;overflow:auto;padding:0.3rem 0.45rem;' +
-                     'background:rgba(0,0,0,0.3);border:1px solid rgba(255,255,255,0.1);border-radius:4px;' +
-                     'font-size:0.58rem;line-height:1.4;color:var(--parchment-dim);white-space:pre-wrap;word-break:break-word;">' +
-            escHtml(bridge.log.join('\n')) +
-          '</pre>' +
-        '</details>';
+        '<div class="tw-collapse" style="margin:-0.25rem 0 0.55rem;">' +
+          '<div class="tw-collapse-header" role="button" tabindex="0" aria-expanded="false"' +
+               ' data-collapse-key="bridge-log"' +
+               ' style="' + _COLLAPSE_HEADER_CSS + 'font-size:0.6rem;color:var(--parchment-dim);">' +
+            _COLLAPSE_ARROW_HTML +
+            '<span>Recent bridge log</span>' +
+          '</div>' +
+          '<div class="tw-collapse-body" style="display:none;">' +
+            '<pre style="margin:0.25rem 0 0;max-height:130px;overflow:auto;padding:0.3rem 0.45rem;' +
+                       'background:rgba(0,0,0,0.3);border:1px solid rgba(255,255,255,0.1);border-radius:4px;' +
+                       'font-size:0.58rem;line-height:1.4;color:var(--parchment-dim);white-space:pre-wrap;word-break:break-word;">' +
+              escHtml(bridge.log.join('\n')) +
+            '</pre>' +
+          '</div>' +
+        '</div>';
     }
 
     var showRestart = !!(data && data.connected && bridge);
@@ -151,6 +245,7 @@
   }
 
   function _wireBridgeRefresh(container) {
+    _wireCollapsibles(container);
     var btn = container.querySelector('.twitch-bridge-refresh');
     if (btn) btn.addEventListener('click', function () { renderInto(container); });
     var restart = container.querySelector('.twitch-bridge-restart');
@@ -425,20 +520,18 @@
     });
 
     groups.forEach(function (group) {
-      var det = document.createElement('details');
-      det.style.cssText = 'margin-bottom:0.35rem;';
       var inTable = {};
       group.table.forEach(function (e) { inTable[e.power_id] = e.weight || 1; });
       var count = group.table.length;
 
-      var summary = document.createElement('summary');
-      summary.style.cssText = 'cursor:pointer;font-size:0.66rem;color:var(--parchment);';
-      summary.innerHTML = escHtml(group.label) +
-        ' <span class="rw-count" style="color:var(--parchment-dim);">(' + count + ' power' + (count === 1 ? '' : 's') + ')</span>';
-      det.appendChild(summary);
+      var row = _makeCollapsible(
+        escHtml(group.label) +
+        ' <span class="rw-count" style="color:var(--parchment-dim);">(' + count + ' power' + (count === 1 ? '' : 's') + ')</span>',
+        'rewards:' + group.label
+      );
 
       var grid = document.createElement('div');
-      grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:0.1rem 0.5rem;padding:0.3rem 0 0.2rem 0.8rem;';
+      grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:0.1rem 0.5rem;padding:0.3rem 0 0.2rem 0.95rem;';
       _availablePowers.forEach(function (pw) {
         var label = document.createElement('label');
         label.style.cssText = 'display:flex;align-items:center;gap:0.28rem;font-size:0.62rem;color:var(--parchment-dim);cursor:pointer;';
@@ -453,14 +546,15 @@
         cb.setAttribute('data-tier-index', group.tierIndex === null ? '' : String(group.tierIndex));
         cb.addEventListener('change', function () {
           var checked = grid.querySelectorAll('input:checked').length;
-          summary.querySelector('.rw-count').textContent = '(' + checked + ' power' + (checked === 1 ? '' : 's') + ')';
+          var countEl = row.header.querySelector('.rw-count');
+          if (countEl) countEl.textContent = '(' + checked + ' power' + (checked === 1 ? '' : 's') + ')';
         });
         label.appendChild(cb);
         label.appendChild(document.createTextNode(pw.name));
         grid.appendChild(label);
       });
-      det.appendChild(grid);
-      wrap.appendChild(det);
+      row.content.appendChild(grid);
+      wrap.appendChild(row.root);
     });
 
     var btnRow = document.createElement('div');

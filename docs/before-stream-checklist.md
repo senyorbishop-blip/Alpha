@@ -64,7 +64,23 @@ In the DM-only status area, verify:
 2. Trigger long rest and confirm HP/resources/Quick Actions resync.
 3. If rest sync fails, retry or reconnect before stream.
 
-## 9. OBS / browser performance
+## 9. Twitch Stream panel expand/collapse check
+
+With Twitch connected, open DM Modes ▸ **Stream** and verify the collapsible
+rows (automated coverage: `tests/e2e/twitch-rewards-panel.spec.ts`):
+
+1. In **Rewards — subs, gifts & bits**, click each tier row ("Single sub /
+   resub", "Gift subs ×5+", "Bits 1000+", …) — clicking anywhere on the row
+   must expand the full viewer-power checkbox list, and the arrow must rotate.
+2. Tick/untick a power and confirm the "(N powers)" count in the row header
+   updates immediately; **Save rewards** persists and the bridge log shows the
+   new config applied without a restart.
+3. Expand **Recent bridge log** (same row pattern) and confirm the log lines
+   appear.
+4. Click elsewhere on the page (e.g. the map) and confirm expanded rows stay
+   open — a stray click must not collapse the panel or discard unsaved ticks.
+
+## 10. OBS / browser performance
 
 - Capture the browser/window you intend to stream.
 - Verify readable zoom, stable FPS, and no flashing reconnect/blank screen.
