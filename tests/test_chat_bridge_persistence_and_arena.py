@@ -37,7 +37,7 @@ def _participant(**kwargs):
 
 def test_serialize_everything_keeps_full_record_and_mode():
     out = _serialize_chat_participants({"dave": _participant()}, "everything")
-    assert out["__config__"] == {"persistence_mode": "everything"}
+    assert out["__config__"] == {"persistence_mode": "everything", "friendly_fire": False}
     rec = out["dave"]
     assert rec["inventory"] == [{"name": "Fireball Scroll", "qty": 1}]
     assert rec["lifetime_stats"]["damage_dealt"] == 40

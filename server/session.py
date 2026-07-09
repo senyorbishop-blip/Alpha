@@ -662,6 +662,9 @@ class Session:
     arena_enabled: bool = True
     # Arena quiet mode: duels queue until the DM signals downtime.
     arena_quiet: bool = False
+    # Friendly fire: can chat items damage party (player-owned) tokens?
+    # Default off — support powers (heals, blessings) are always allowed.
+    chat_friendly_fire: bool = False
     # What chat-participant data survives between sessions:
     # "everything" (default) | "stats" (lifetime/arena stats only) | "nothing"
     chat_persistence_mode: str = "everything"

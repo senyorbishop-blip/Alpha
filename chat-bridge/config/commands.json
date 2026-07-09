@@ -6,7 +6,7 @@
   "!inv":         "inventory",
   "!bag":         "bag",
   "!target":      "target",
-  "!use":         "target",
+  "!use":         "use",
   "!help":        "help",
   "!commands":    "help",
   "!command":     "help",
