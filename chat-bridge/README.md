@@ -141,9 +141,24 @@ Fill in all values in `.env`:
 
 ---
 
-## 5. Customize Loot Tables
+## 5. Customize Loot Tables / Rewards
 
-Edit `config/loot-tables.json` to change what items are rolled for subs, bits, and raids. Each entry has a `weight` (higher = more common):
+**Preferred: in-app Rewards panel.** The DM configures sub / gift-sub / bits
+rewards directly in the Stream panel ("Rewards — subs, gifts & bits"). Tables
+are built from the viewer-power list (Pebble Toss, Healing Spark, Fireball,
+Give Potion, …), persist per campaign on the server, and the bridge fetches
+them at startup and re-applies them live whenever the DM saves changes — no
+restart or JSON editing needed. Defaults ship pre-filled:
+
+- **Single sub / resub** (and each gift recipient) → a "basic" support table
+  (heals + potions).
+- **Gift subs** → the *gifter* rolls from tiers by batch size (×1, ×5, ×10+ —
+  the top tier includes every power).
+- **Bits** → threshold tiers (100 / 500 / 1000+).
+
+**Fallback: local JSON.** When the server has no rewards config (or the fetch
+fails), the bridge falls back to `config/loot-tables.json` item tables. Each
+entry has a `weight` (higher = more common):
 
 ```json
 "sub": [
@@ -152,13 +167,16 @@ Edit `config/loot-tables.json` to change what items are rolled for subs, bits, a
 ]
 ```
 
-Bits tiers are configured as an array with `threshold` values — the highest threshold the bit amount meets is used.
+Bits tiers are configured as an array with `threshold` values — the highest threshold the bit amount meets is used. Raid loot always comes from the local `raid` table.
 
 ---
 
 ## 6. Add Custom Chat Commands
 
-Edit `config/commands.json`. Currently supported actions are `join`, `leave`, `inventory`, `target`. Map any command prefix to one of these actions:
+Edit `config/commands.json`. Supported actions: `join`, `leave`, `inventory`,
+`target`, `help`, `vote`, `name`, `me`, `stats`, `bag`, `equip`, `shop`,
+`buy`, `levelup`, `leaderboard`, `arena`. Map any command prefix to one of
+these actions (multiple prefixes per action = aliases):
 
 ```json
 {
@@ -232,8 +250,29 @@ docker run --env-file .env chat-bridge
 |---|---|
 | `!join` | Register as a chat participant. Idempotent. |
 | `!leave` | Leave the session roster. |
-| `!inventory` | See your current items (bot replies with @mention). |
-| `!target <name>` | Use your first available item on a token matching `<name>`. |
+| `!inventory` / `!inv` | See your campaign items, each with its exact trigger command. |
+| `!target <name>` / `!use <name>` | Use your first available item on a token matching `<name>`. |
+| `!help` / `!commands` / `!command` | Compact command list with usage hints. |
+| `!vote <n>` | Vote on the active DM poll. |
+| `!name <name>` | Set your in-game character name. |
+| `!me` / `!character` | Your character summary (items, sessions, damage, arena record). |
+| `!stats` / `!sheet` | Full arena ability scores with item bonuses, HP/AC/ATK, XP, gold. |
+| `!bag` | Your arena gear (separate from campaign `!inventory`). |
+| `!equip <item>` | Equip arena gear into its slot (weapon / armor / trinket). |
+| `!shop` | List arena shop items and prices. |
+| `!buy <item>` | Buy arena gear with gold earned from duels. |
+| `!levelup` | Level up when you have enough XP (+1 primary stat, +1 random stat). |
+| `!leaderboard` | Top arena fighters. |
+| `!duel <name>` / `!accept` / `!decline` | Chatter-vs-chatter arena duels. |
+
+On first use of any arena command a character is rolled automatically: a
+random class with 4d6-drop-lowest ability scores and 50 starting gold. Duel
+wins/losses award XP and gold; class, level, and equipped gear feed into duel
+HP / AC / attack rolls. Progress persists on the game server per campaign.
+
+Unknown `!commands` from joined chatters get a single rate-limited pointer to
+`!help`; commands from chatters who never joined are ignored so the bot won't
+answer other bots' prefixes.
 
 ---
 

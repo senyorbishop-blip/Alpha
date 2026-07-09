@@ -1345,7 +1345,9 @@ async def handle_dm_chat_participant_update(payload: dict, session: Session, use
 async def handle_dm_chat_participant_reset(payload: dict, session: Session, user: User):
     """DM resets a chat character.
 
-    scope: "stats" | "inventory" | "arena" | "all" (default) | "remove"
+    scope: "stats" | "inventory" | "arena" | "all" (default) | "remove" | "kick"
+    "kick" marks the chatter inactive (they leave the party but keep their
+    record and can !join again); "remove" deletes the record entirely.
     """
     raw_username = str(payload.get("twitch_username") or "").strip()
     scope = str(payload.get("scope") or "all").strip().lower()
@@ -1358,7 +1360,14 @@ async def handle_dm_chat_participant_reset(payload: dict, session: Session, user
         })
         return
 
-    if scope == "remove":
+    if scope == "kick":
+        session.chat_participants[key] = participant
+        participant.is_active = False
+        await manager.broadcast(session.id, {
+            "type": "chat_participant_left",
+            "payload": {"twitch_username": key, "display_name": participant.display_name},
+        })
+    elif scope == "remove":
         session.chat_participants.pop(key, None)
     else:
         session.chat_participants[key] = participant
@@ -1387,6 +1396,200 @@ async def handle_dm_chat_participant_reset(payload: dict, session: Session, user
     await manager.send_to(session.id, user.id, {
         "type": "dm_chat_participant_reset_result",
         "payload": {"success": True, "twitch_username": key, "scope": scope},
+    })
+    await save_campaign_async(session)
+
+
+# ---------------------------------------------------------------------------
+# DM-configurable Twitch reward tables
+#
+# Maps Twitch events to weighted tables of viewer powers. Stored on
+# session.chat_rewards_config (persisted per campaign); served to the bridge
+# resolved with power display names. Shape:
+#   { "version": 1,
+#     "sub":        [{"power_id": "...", "weight": N}, …],        # sub / resub / gift recipient
+#     "gift_tiers": [{"min_count": 1, "table": […]}, …],          # gifter reward by batch size
+#     "bits_tiers": [{"threshold": 100, "table": […]}, …] }       # cheer reward by bits amount
+# ---------------------------------------------------------------------------
+
+_REWARDS_MAX_TABLE = 50
+_REWARDS_MAX_TIERS = 10
+
+
+def _default_chat_rewards_config() -> dict:
+    """Out-of-the-box reward tables built from the base viewer-power list."""
+    from server.handlers.viewer_powers import VIEWER_BASE_POWER_DEFS
+
+    def table(*pairs):
+        return [{"power_id": pid, "weight": w} for pid, w in pairs]
+
+    all_powers = table(*[(pid, 1) for pid in VIEWER_BASE_POWER_DEFS.keys()])
+
+    return {
+        "version": 1,
+        # Single sub / resub / gift recipient: heals and support items.
+        "sub": table(
+            ("healing_spark", 40), ("battle_blessing", 25),
+            ("give_potion", 20), ("pebble_toss", 15),
+        ),
+        "gift_tiers": [
+            {"min_count": 1, "table": table(
+                ("healing_spark", 30), ("battle_blessing", 20), ("give_potion", 15),
+                ("arcane_zap", 20), ("give_random_item", 15),
+            )},
+            {"min_count": 5, "table": table(
+                ("battle_blessing", 20), ("arcane_zap", 20), ("give_random_item", 15),
+                ("fireball", 15), ("trip_hex", 10), ("smoke_burst", 10), ("knockback", 10),
+            )},
+            {"min_count": 10, "table": all_powers},
+        ],
+        "bits_tiers": [
+            {"threshold": 100, "table": table(
+                ("pebble_toss", 50), ("arcane_zap", 30), ("healing_spark", 20),
+            )},
+            {"threshold": 500, "table": table(
+                ("arcane_zap", 25), ("battle_blessing", 25), ("trip_hex", 20),
+                ("goo_burst", 15), ("fireball", 15),
+            )},
+            {"threshold": 1000, "table": all_powers},
+        ],
+    }
+
+
+def _normalize_rewards_table(raw, defs: dict) -> list:
+    """Whitelist + clamp one weighted power table."""
+    out = []
+    if not isinstance(raw, list):
+        return out
+    for entry in raw[:_REWARDS_MAX_TABLE]:
+        if not isinstance(entry, dict):
+            continue
+        pid = str(entry.get("power_id") or "").strip().lower()[:64]
+        if not pid or pid not in defs:
+            continue
+        try:
+            weight = int(entry.get("weight", 1) or 1)
+        except (TypeError, ValueError):
+            weight = 1
+        out.append({"power_id": pid, "weight": max(1, min(1000, weight))})
+    return out
+
+
+def _normalize_chat_rewards_config(session: Session, raw: dict) -> dict | None:
+    """Validate a DM-submitted rewards config against the session's power defs."""
+    if not isinstance(raw, dict):
+        return None
+    from server.handlers.viewer_powers import _viewer_power_defs
+    defs = _viewer_power_defs(session)
+
+    def tiers(raw_tiers, key):
+        out = []
+        if not isinstance(raw_tiers, list):
+            return out
+        for tier in raw_tiers[:_REWARDS_MAX_TIERS]:
+            if not isinstance(tier, dict):
+                continue
+            try:
+                bound = int(tier.get(key, 0) or 0)
+            except (TypeError, ValueError):
+                continue
+            out.append({key: max(1, min(1_000_000, bound)),
+                        "table": _normalize_rewards_table(tier.get("table"), defs)})
+        out.sort(key=lambda t: t[key])
+        return out
+
+    return {
+        "version": 1,
+        "sub": _normalize_rewards_table(raw.get("sub"), defs),
+        "gift_tiers": tiers(raw.get("gift_tiers"), "min_count"),
+        "bits_tiers": tiers(raw.get("bits_tiers"), "threshold"),
+    }
+
+
+def _chat_rewards_config(session: Session) -> dict:
+    """The session's rewards config, falling back to the shipped defaults."""
+    raw = getattr(session, "chat_rewards_config", None)
+    if isinstance(raw, dict) and raw.get("version"):
+        normalized = _normalize_chat_rewards_config(session, raw)
+        if normalized is not None:
+            return normalized
+    return _normalize_chat_rewards_config(session, _default_chat_rewards_config())
+
+
+def _resolved_chat_rewards_payload(session: Session) -> dict:
+    """Config with power display names resolved, plus the pickable power list
+    for the DM's Rewards UI."""
+    from server.handlers.viewer_powers import _viewer_power_defs
+    defs = _viewer_power_defs(session)
+    config = _chat_rewards_config(session)
+
+    def resolve_table(table):
+        return [
+            {**entry, "name": str(defs.get(entry["power_id"], {}).get("name") or entry["power_id"])}
+            for entry in table
+        ]
+
+    resolved = {
+        "version": config["version"],
+        "sub": resolve_table(config["sub"]),
+        "gift_tiers": [{**t, "table": resolve_table(t["table"])} for t in config["gift_tiers"]],
+        "bits_tiers": [{**t, "table": resolve_table(t["table"])} for t in config["bits_tiers"]],
+    }
+    available = [
+        {"power_id": pid, "name": str(d.get("name") or pid), "description": str(d.get("description") or "")}
+        for pid, d in defs.items()
+    ]
+    return {"config": resolved, "available_powers": available}
+
+
+async def handle_chat_bridge_rewards_get(payload: dict, session: Session, user: User):
+    """Bridge fetches the resolved reward tables (startup + on-change refresh)."""
+    await manager.send_to(session.id, user.id, {
+        "type": "chat_bridge_rewards_result",
+        "payload": _echo_req(payload, _resolved_chat_rewards_payload(session)),
+    })
+
+
+async def handle_dm_chat_rewards_get(payload: dict, session: Session, user: User):
+    """DM fetches the rewards config + available powers for the Stream panel."""
+    await manager.send_to(session.id, user.id, {
+        "type": "dm_chat_rewards_result",
+        "payload": _resolved_chat_rewards_payload(session),
+    })
+
+
+async def handle_dm_chat_rewards_update(payload: dict, session: Session, user: User):
+    """DM saves reward tables. Pass {"reset": true} to restore the defaults."""
+    if payload.get("reset"):
+        session.chat_rewards_config = {}
+    else:
+        normalized = _normalize_chat_rewards_config(session, payload.get("config"))
+        if normalized is None:
+            await manager.send_to(session.id, user.id, {
+                "type": "error",
+                "payload": {"message": "config must be an object with sub/gift_tiers/bits_tiers."},
+            })
+            return
+        session.chat_rewards_config = normalized
+
+    resolved = _resolved_chat_rewards_payload(session)
+
+    log_entry = session.add_log(
+        "Twitch reward tables updated by DM." if not payload.get("reset")
+        else "Twitch reward tables reset to defaults.",
+        msg_type="system",
+        user_name=user.name,
+    )
+    # Broadcast so the bridge applies the new tables immediately and other DM
+    # clients refresh their Rewards section.
+    await manager.broadcast(session.id, {
+        "type": "chat_rewards_updated",
+        "payload": resolved,
+    })
+    await manager.broadcast(session.id, {"type": "log_entry", "payload": {"log": log_entry}})
+    await manager.send_to(session.id, user.id, {
+        "type": "dm_chat_rewards_result",
+        "payload": {**resolved, "saved": True},
     })
     await save_campaign_async(session)
 

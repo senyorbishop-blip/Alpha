@@ -665,6 +665,9 @@ class Session:
     # What chat-participant data survives between sessions:
     # "everything" (default) | "stats" (lifetime/arena stats only) | "nothing"
     chat_persistence_mode: str = "everything"
+    # DM-configured Twitch reward tables (sub/gift/bits → viewer-power tables).
+    # Empty dict = use the shipped defaults. Persisted per campaign.
+    chat_rewards_config: dict = field(default_factory=dict)
     # _encumbrance_cache is set dynamically; keyed by user_id → {state, speed_penalty}
     # Not declared here so it doesn't show up in persistence serialisation.
 

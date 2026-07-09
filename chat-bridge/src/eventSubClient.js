@@ -17,9 +17,10 @@ const HELIX_BASE = 'https://api.twitch.tv/helix';
  *  - channel.raid
  *
  * Emits events via registered handlers:
- *   on('sub',   { username, displayName, months, gifted })
- *   on('bits',  { username, displayName, amount, message })
- *   on('raid',  { fromUsername, fromDisplayName, viewers })
+ *   on('sub',     { username, displayName, months, gifted })
+ *   on('giftsub', { username, displayName, total })   — the GIFTER of a batch
+ *   on('bits',    { username, displayName, amount, message })
+ *   on('raid',    { fromUsername, fromDisplayName, viewers })
  */
 class EventSubClient {
   constructor({ clientId, oauthToken, broadcasterId, logger }) {
@@ -127,25 +128,26 @@ class EventSubClient {
     switch (subType) {
       case 'channel.subscribe':
       case 'channel.subscription.message': {
+        // channel.subscribe also fires once per gift RECIPIENT (is_gift=true);
+        // they get a normal sub reward tagged as gifted.
         const username = String(event.user_login ?? '').toLowerCase();
         const displayName = event.user_name ?? username;
         const months = event.cumulative_months ?? event.streak_months ?? 1;
-        this._emit('sub', { username, displayName, months, gifted: false });
+        this._emit('sub', { username, displayName, months, gifted: !!event.is_gift });
         break;
       }
       case 'channel.subscription.gift': {
+        // Fires once per gift BATCH from the gifter's perspective. The payload
+        // has no recipient info — recipients arrive as channel.subscribe
+        // events with is_gift=true. `total` is the batch size (gift tiers).
         const gifterUsername = String(event.user_login ?? '').toLowerCase();
         const gifterDisplay = event.user_name ?? gifterUsername;
-        const recipientUsername = String(event.recipient_user_login ?? '').toLowerCase();
-        const recipientDisplay = event.recipient_user_name ?? recipientUsername;
-        // Grant loot to the recipient
-        this._emit('sub', {
-          username: recipientUsername,
-          displayName: recipientDisplay,
-          months: 1,
-          gifted: true,
-          gifterUsername,
-          gifterDisplay,
+        const total = Number(event.total ?? 1) || 1;
+        if (event.is_anonymous || !gifterUsername) break;
+        this._emit('giftsub', {
+          username: gifterUsername,
+          displayName: gifterDisplay,
+          total,
         });
         break;
       }

@@ -148,11 +148,45 @@
     return handlers[handlerName](msg.payload || {}, runtimeEnv) === true;
   }
 
+  // Chat-bridge participant events: keep the DM's Chat Party list live and
+  // toast on each !join. Overlays handle these separately; play.html has no
+  // legacy cases for them, so consuming them here is safe for every role.
+  const CHAT_PARTY_EVENT_TYPES = new Set([
+    'chat_participant_joined',
+    'chat_participant_left',
+    'chat_participant_updated',
+    'chat_participant_loot_received',
+    'chat_participant_item_granted',
+    'chat_participants_sync',
+  ]);
+
+  function tryHandleChatPartyMessage(msg) {
+    if (!CHAT_PARTY_EVENT_TYPES.has(msg.type)) return false;
+    const p = msg.payload || {};
+    if (global.ROLE === 'dm' && msg.type === 'chat_participant_joined') {
+      const name = p.display_name || p.twitch_username || 'A chatter';
+      const notify = global.AppUINotifications;
+      if (notify && typeof notify.showParchmentNotification === 'function') {
+        notify.showParchmentNotification(name + ' joined from Twitch chat — see Stream ▸ Chat Party.', {
+          variant: 'info',
+          title: 'Chat Party',
+          duration: 3500,
+        });
+      }
+    }
+    const panel = global.TwitchSettingsPanel;
+    if (panel && typeof panel.notifyChatPartyEvent === 'function') {
+      panel.notifyChatPartyEvent(msg.type, p);
+    }
+    return true;
+  }
+
   function handleLegacyDomainMessage(msg, env) {
     if (!msg || typeof msg !== 'object') return false;
     const runtimeEnv = env || {};
     const p = msg.payload || {};
     if (tryHandleMigratedModuleMessage(msg, runtimeEnv)) return true;
+    if (tryHandleChatPartyMessage(msg)) return true;
     switch (msg.type) {
       case 'journal_sync':
         if (typeof runtimeEnv.loadJournalEntries === 'function') runtimeEnv.loadJournalEntries(p.entries || []);

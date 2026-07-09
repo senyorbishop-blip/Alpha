@@ -287,6 +287,9 @@ from server.handlers.chat_bridge import (
     handle_dm_chat_participant_update,
     handle_dm_chat_participant_reset,
     handle_dm_chat_persistence_mode,
+    handle_chat_bridge_rewards_get,
+    handle_dm_chat_rewards_get,
+    handle_dm_chat_rewards_update,
 )
 from server.handlers.token_placement_secure import handle_token_placed_secure
 from server.handlers.ws_permissions import is_ws_message_allowed_for_role
@@ -532,6 +535,10 @@ async def handle_message(raw: dict, session: Session, user: User):
         "dm_chat_participant_update":        handle_dm_chat_participant_update,
         "dm_chat_participant_reset":         handle_dm_chat_participant_reset,
         "dm_chat_persistence_mode":          handle_dm_chat_persistence_mode,
+        "dm_chat_rewards_get":               handle_dm_chat_rewards_get,
+        "dm_chat_rewards_update":            handle_dm_chat_rewards_update,
+        # ── Twitch reward tables (chat_bridge role, read-only) ─────────────
+        "chat_bridge_rewards_get":           handle_chat_bridge_rewards_get,
         # ── Arena stats sync (chat_bridge role) ────────────────────────────
         "chat_participant_arena_stats_update": handle_chat_participant_arena_stats_update,
         # ── Arena character persistence + leaderboard (chat_bridge role) ────

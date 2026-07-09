@@ -197,6 +197,7 @@ def restore_session_from_db(data: dict):
     session.show_viewer_presence = bool(data.get("show_viewer_presence", False))
 
     _restore_chat_participants(session, data)
+    session.chat_rewards_config = data.get("chat_rewards_config", {}) or {}
 
     map_documents = data.get("map_documents", {}) or {}
     if map_documents:

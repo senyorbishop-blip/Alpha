@@ -39,12 +39,15 @@ class Arena {
    * @param {function} [opts.onStatsUpdate]    — (username, {wins, losses, arena_gold}) → Promise<void>
    * @param {function} [opts.onDisplayEvent]   — (eventPayload) → void  (for OBS overlay)
    */
-  constructor({ twitchClient, config = {}, logger, onStatsUpdate, onDisplayEvent }) {
+  constructor({ twitchClient, config = {}, logger, onStatsUpdate, onDisplayEvent, progression }) {
     this._twitch      = twitchClient;
     this._config      = config;
     this._logger      = logger || console;
     this._onStats     = onStatsUpdate  || (() => Promise.resolve());
     this._onDisplay   = onDisplayEvent || (() => {});
+    // Optional ArenaProgression: when attached, duels use each fighter's
+    // class/level/gear-derived HP/AC/attack and award XP + gold on finish.
+    this._progression = progression || null;
 
     this._enabled     = true;
     this._quietMode   = false;
@@ -194,11 +197,43 @@ class Arena {
   // ── Auto-resolve fight ───────────────────────────────────────────────────────
 
   _startDuel(channel, challenger, challenged) {
+    // Fire-and-forget: challenge flow is synchronous, but fighter stats may
+    // need an async progression-sheet load before the duel can begin.
+    this._startDuelAsync(channel, challenger, challenged).catch(err =>
+      this._logger.error('[Arena] duel start error:', err)
+    );
+  }
+
+  async _fighterStats(username) {
+    const fallback = { maxHp: ARENA_HP, ac: ARENA_AC, atkBonus: 0 };
+    if (!this._progression) return fallback;
+    try {
+      const stats = await this._progression.combatStatsFor(username);
+      return {
+        maxHp: Math.max(1, Number(stats.maxHp) || ARENA_HP),
+        ac: Math.max(1, Number(stats.ac) || ARENA_AC),
+        atkBonus: Number(stats.atkBonus) || 0,
+      };
+    } catch (err) {
+      this._logger.error('[Arena] progression stats error:', err);
+      return fallback;
+    }
+  }
+
+  async _startDuelAsync(channel, challenger, challenged) {
+    const [chStats, cdStats] = await Promise.all([
+      this._fighterStats(challenger),
+      this._fighterStats(challenged),
+    ]);
+
+    // A duel may have started for either fighter while stats loaded.
+    if (this._activeDuels.has(challenger) || this._activeDuels.has(challenged)) return;
+
     const state = {
       channel,
       participants: {
-        [challenger]: { username: challenger, hp: ARENA_HP, name: challenger },
-        [challenged]: { username: challenged, hp: ARENA_HP, name: challenged },
+        [challenger]: { username: challenger, hp: chStats.maxHp, name: challenger, ...chStats },
+        [challenged]: { username: challenged, hp: cdStats.maxHp, name: challenged, ...cdStats },
       },
       round: 0,
       finished: false,
@@ -214,10 +249,10 @@ class Arena {
       event_type: 'duel_start',
       challenger,
       opponent: challenged,
-      challenger_hp: ARENA_HP,
-      opponent_hp: ARENA_HP,
-      challenger_max_hp: ARENA_HP,
-      opponent_max_hp: ARENA_HP,
+      challenger_hp: chStats.maxHp,
+      opponent_hp: cdStats.maxHp,
+      challenger_max_hp: chStats.maxHp,
+      opponent_max_hp: cdStats.maxHp,
       round: 0,
     });
 
@@ -238,14 +273,17 @@ class Arena {
     let defender = challenged;
 
     for (let r = 0; r < maxRounds && !state.finished; r++) {
-      const roll = d(20);
       const p = state.participants;
+      const roll = d(20);
+      const atk = p[attacker].atkBonus || 0;
+      const targetAc = p[defender].ac || ARENA_AC;
 
-      if (roll >= ARENA_AC) {
+      if (roll + atk >= targetAc) {
         const dmg = d(ARENA_DMG_DIE);
         p[defender].hp = Math.max(0, p[defender].hp - dmg);
         const flavour = roll >= 18 ? 'critical strike' : roll >= 14 ? 'solid blow' : 'hit';
-        messages.push(`Round ${r + 1}: @${attacker} rolled ${roll} — ${flavour}! @${defender} takes ${dmg} damage. (${p[defender].hp}/${ARENA_HP} HP remaining)`);
+        const rollLabel = atk ? `${roll}+${atk}` : `${roll}`;
+        messages.push(`Round ${r + 1}: @${attacker} rolled ${rollLabel} — ${flavour}! @${defender} takes ${dmg} damage. (${p[defender].hp}/${p[defender].maxHp || ARENA_HP} HP remaining)`);
         if (p[defender].hp <= 0) {
           messages.push(`💀 @${defender} has been defeated! @${attacker} wins the duel!`);
           state.finished = true;
@@ -289,8 +327,8 @@ class Arena {
           opponent: challenged,
           challenger_hp: p[challenger].hp,
           opponent_hp: p[challenged].hp,
-          challenger_max_hp: ARENA_HP,
-          opponent_max_hp: ARENA_HP,
+          challenger_max_hp: p[challenger].maxHp || ARENA_HP,
+          opponent_max_hp: p[challenged].maxHp || ARENA_HP,
           round: i + 1,
           message: msg,
         });
@@ -350,20 +388,20 @@ class Arena {
 
     if (action === 'defend') {
       msg = `@${attacker} braces for impact (AC+4 this round). @${defender} attacks — rolled ${roll}...`;
-      const effectiveAC = ARENA_AC + 4;
-      if (roll >= effectiveAC) {
+      const effectiveAC = (p[attacker].ac || ARENA_AC) + 4;
+      if (roll + (p[defender].atkBonus || 0) >= effectiveAC) {
         const dmg = Math.max(1, d(ARENA_DMG_DIE) - 2);
         p[attacker].hp = Math.max(0, p[attacker].hp - dmg);
-        msg += ` still hits for ${dmg} damage. (${p[attacker].hp}/${ARENA_HP} HP)`;
+        msg += ` still hits for ${dmg} damage. (${p[attacker].hp}/${p[attacker].maxHp || ARENA_HP} HP)`;
       } else {
         msg += ` blocked!`;
       }
     } else {
       // attack
-      if (roll >= ARENA_AC) {
+      if (roll + (p[attacker].atkBonus || 0) >= (p[defender].ac || ARENA_AC)) {
         const dmg = d(ARENA_DMG_DIE);
         p[defender].hp = Math.max(0, p[defender].hp - dmg);
-        msg = `@${attacker} attacks (rolled ${roll}) — hits for ${dmg} damage! @${defender}: ${p[defender].hp}/${ARENA_HP} HP`;
+        msg = `@${attacker} attacks (rolled ${roll}) — hits for ${dmg} damage! @${defender}: ${p[defender].hp}/${p[defender].maxHp || ARENA_HP} HP`;
       } else {
         msg = `@${attacker} attacks (rolled ${roll}) — miss!`;
       }
@@ -405,24 +443,31 @@ class Arena {
       winner:            state.winner || '',
       challenger_hp:     p[challenger]?.hp ?? 0,
       opponent_hp:       p[challenged]?.hp ?? 0,
-      challenger_max_hp: ARENA_HP,
-      opponent_max_hp:   ARENA_HP,
+      challenger_max_hp: p[challenger]?.maxHp ?? ARENA_HP,
+      opponent_max_hp:   p[challenged]?.maxHp ?? ARENA_HP,
     });
 
-    // Update in-memory stats
     if (state.winner && state.loser) {
-      const wStats = this._getStats(state.winner);
-      const lStats = this._getStats(state.loser);
-      wStats.wins++;
-      lStats.losses++;
+      if (this._progression) {
+        // Progression owns persistent stats: XP, gold, streaks, win/loss all
+        // land on the arena character sheet and sync to the server there.
+        this._progression.recordDuelResult(state.winner, state.loser, state.channel)
+          .catch(err => this._logger.error('[Arena] progression result error:', err));
+      } else {
+        // Legacy in-memory stats path
+        const wStats = this._getStats(state.winner);
+        const lStats = this._getStats(state.loser);
+        wStats.wins++;
+        lStats.losses++;
 
-      // Notify via callback (index.js syncs to game server)
-      this._onStats(state.winner, { ...wStats }).catch(err =>
-        this._logger.error('[Arena] stats sync error:', err)
-      );
-      this._onStats(state.loser, { ...lStats }).catch(err =>
-        this._logger.error('[Arena] stats sync error:', err)
-      );
+        // Notify via callback (index.js syncs to game server)
+        this._onStats(state.winner, { ...wStats }).catch(err =>
+          this._logger.error('[Arena] stats sync error:', err)
+        );
+        this._onStats(state.loser, { ...lStats }).catch(err =>
+          this._logger.error('[Arena] stats sync error:', err)
+        );
+      }
     }
   }
 

@@ -672,6 +672,7 @@ def normalize_persisted_campaign_data(data: dict[str, Any] | None) -> dict[str, 
         "corpse_states",
         "corpse_dm_config",
         "chat_participants",
+        "chat_rewards_config",
     ):
         normalized[field] = _as_dict(src.get(field))
     # Encumbrance settings (DM-configurable rules)
@@ -773,6 +774,7 @@ def extract_persistable_campaign_state(session: Any) -> dict[str, Any]:
             getattr(session, "chat_participants", None) or {},
             getattr(session, "chat_persistence_mode", "everything"),
         ),
+        "chat_rewards_config": _clone(getattr(session, "chat_rewards_config", None) or {}),
         "handouts": _clone(getattr(session, "handouts", None) or []),
         "discovery_cards": _clone(getattr(session, "discovery_cards", None) or []),
         "private_story_hooks": _clone(getattr(session, "private_story_hooks", None) or []),
