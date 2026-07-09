@@ -10,6 +10,11 @@ This project currently uses a practical founder-beta version format:
 
 ## [Unreleased]
 
+### Added
+- The game server now auto-starts the Twitch chat bridge as a supervised child process — no manual `npm start`. It spawns when a session has a connected Twitch channel with the chat bridge enabled, restarts crashed bridges with capped exponential backoff (marked failed after 5 retries), pipes bridge output into the server log with a `[chat-bridge]` prefix, and cleanly terminates the process tree (Windows-safe) on toggle-off, Twitch disconnect, or server shutdown.
+- Stream panel bridge status now shows running / starting / failed (with the last error line) / stopped, a recent-bridge-log view, and a "Restart bridge" button. A clear panel error appears when Node.js is not installed.
+- Manual `npm start` keeps working for development: the server skips auto-spawn when a bridge for the session is already connected.
+
 ## [v0.9.1-beta] - 2026-03-30
 
 ### Added

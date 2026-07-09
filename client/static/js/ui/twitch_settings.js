@@ -61,34 +61,113 @@
     }
   }
 
-  // ── Bridge status row (chat bridge service ⇄ this session) ─────────────────
+  // ── Bridge status row (supervised chat-bridge process ⇄ this session) ──────
 
   function _bridgeStatusHtml(data) {
-    var known = !!(data && typeof data.bridge_connected === 'boolean');
-    var up = !!(data && data.bridge_connected);
-    var dotColor = up ? '#3fca6b' : 'rgba(255,255,255,0.28)';
-    var label = up ? 'Bridge connected' : 'Bridge not running';
-    var labelColor = up ? '#3fca6b' : 'var(--parchment-dim)';
-    var hint = up
-      ? 'Chat commands like !join are live.'
-      : 'Start the chat-bridge service to enable chat commands.';
+    var bridge = (data && data.bridge) || null;
+    // Fall back to the legacy connected boolean when the supervisor block is
+    // missing (e.g. older server still running behind a cached client).
+    var state = bridge ? String(bridge.state || 'stopped')
+                       : (data && data.bridge_connected ? 'running' : 'stopped');
+    var managed = !!(bridge && bridge.managed);
+    var known = !!(bridge || (data && typeof data.bridge_connected === 'boolean'));
+
+    var dotColor, label, labelColor, hint, glow = '';
+    if (state === 'running') {
+      dotColor = '#3fca6b';
+      labelColor = '#3fca6b';
+      glow = 'box-shadow:0 0 6px rgba(63,202,107,0.7);';
+      label = managed ? 'Bridge running' : 'Bridge running (manual)';
+      hint = managed ? 'Chat commands like !join are live.'
+                     : 'Started externally (npm start); chat commands are live.';
+    } else if (state === 'starting') {
+      dotColor = '#e0b040';
+      labelColor = '#e0b040';
+      glow = 'box-shadow:0 0 6px rgba(224,176,64,0.6);';
+      label = 'Bridge starting…';
+      hint = (bridge && bridge.retries > 0)
+        ? ('Restarting (attempt ' + bridge.retries + '/' + (bridge.max_retries || 5) + ').')
+        : 'Launching the chat-bridge process…';
+    } else if (state === 'failed') {
+      dotColor = '#e05050';
+      labelColor = '#e05050';
+      label = 'Bridge failed';
+      hint = 'Use Restart to try again.';
+    } else {
+      dotColor = 'rgba(255,255,255,0.28)';
+      labelColor = 'var(--parchment-dim)';
+      label = 'Bridge stopped';
+      hint = (data && data.connected)
+        ? 'Enable the chat bridge to start it automatically.'
+        : 'Connect Twitch to start the chat bridge automatically.';
+    }
     if (!known) { label = 'Bridge status unknown'; hint = ''; }
+
+    var errorHtml = '';
+    if (state === 'failed' && bridge && bridge.last_error) {
+      errorHtml =
+        '<div style="margin:-0.35rem 0 0.55rem;padding:0.3rem 0.45rem;background:rgba(180,30,30,0.12);' +
+               'border:1px solid rgba(180,30,30,0.35);border-radius:4px;font-size:0.62rem;color:#e07070;' +
+               'font-family:monospace;word-break:break-word;">' +
+          escHtml(bridge.last_error) +
+        '</div>';
+    }
+
+    var logHtml = '';
+    if (bridge && bridge.log && bridge.log.length) {
+      logHtml =
+        '<details style="margin:-0.25rem 0 0.55rem;">' +
+          '<summary style="font-size:0.6rem;color:var(--parchment-dim);cursor:pointer;">Recent bridge log</summary>' +
+          '<pre style="margin:0.25rem 0 0;max-height:130px;overflow:auto;padding:0.3rem 0.45rem;' +
+                     'background:rgba(0,0,0,0.3);border:1px solid rgba(255,255,255,0.1);border-radius:4px;' +
+                     'font-size:0.58rem;line-height:1.4;color:var(--parchment-dim);white-space:pre-wrap;word-break:break-word;">' +
+            escHtml(bridge.log.join('\n')) +
+          '</pre>' +
+        '</details>';
+    }
+
+    var showRestart = !!(data && data.connected && bridge);
+    var restartBtn = showRestart
+      ? '<button type="button" class="twitch-bridge-restart"' +
+               ' style="padding:0.12rem 0.45rem;background:rgba(201,168,76,0.14);color:#c9a84c;' +
+                      'border:1px solid rgba(201,168,76,0.35);border-radius:4px;font-size:0.6rem;cursor:pointer;">Restart bridge</button>'
+      : '';
+
     return (
-      '<div class="twitch-bridge-status" style="display:flex;align-items:center;gap:0.4rem;margin-bottom:0.6rem;">' +
-        '<span style="width:9px;height:9px;border-radius:50%;background:' + dotColor + ';flex-shrink:0;' +
-               (up ? 'box-shadow:0 0 6px rgba(63,202,107,0.7);' : '') + '"></span>' +
+      '<div class="twitch-bridge-status" style="display:flex;align-items:center;gap:0.4rem;margin-bottom:0.6rem;flex-wrap:wrap;">' +
+        '<span style="width:9px;height:9px;border-radius:50%;background:' + dotColor + ';flex-shrink:0;' + glow + '"></span>' +
         '<span style="font-size:0.7rem;font-weight:600;color:' + labelColor + ';">' + label + '</span>' +
         (hint ? '<span style="font-size:0.62rem;color:var(--parchment-dim);">' + hint + '</span>' : '') +
-        '<button type="button" class="twitch-bridge-refresh" title="Re-check bridge status"' +
-                ' style="margin-left:auto;padding:0.12rem 0.4rem;background:rgba(255,255,255,0.06);color:var(--parchment-dim);' +
-                       'border:1px solid rgba(255,255,255,0.15);border-radius:4px;font-size:0.6rem;cursor:pointer;">&#8635;</button>' +
-      '</div>'
+        '<span style="margin-left:auto;display:flex;gap:0.3rem;">' +
+          restartBtn +
+          '<button type="button" class="twitch-bridge-refresh" title="Re-check bridge status"' +
+                  ' style="padding:0.12rem 0.4rem;background:rgba(255,255,255,0.06);color:var(--parchment-dim);' +
+                         'border:1px solid rgba(255,255,255,0.15);border-radius:4px;font-size:0.6rem;cursor:pointer;">&#8635;</button>' +
+        '</span>' +
+      '</div>' +
+      errorHtml +
+      logHtml
     );
   }
 
   function _wireBridgeRefresh(container) {
     var btn = container.querySelector('.twitch-bridge-refresh');
     if (btn) btn.addEventListener('click', function () { renderInto(container); });
+    var restart = container.querySelector('.twitch-bridge-restart');
+    if (restart) {
+      restart.addEventListener('click', function () {
+        restart.disabled = true;
+        restart.textContent = 'Restarting…';
+        fetch('/api/chat-bridge/restart/' + encodeURIComponent(getSessionId()), {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        })
+          .then(function () { setTimeout(function () { renderInto(container); }, 1200); })
+          .catch(function () { setTimeout(function () { renderInto(container); }, 1200); });
+      });
+    }
   }
 
   function renderPanel(data, container) {
@@ -144,7 +223,11 @@
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabled: val }),
-      }).catch(function () {});
+      })
+        // The toggle now starts/stops the supervised bridge process —
+        // re-render shortly so the status row reflects starting/stopped.
+        .then(function () { setTimeout(function () { renderInto(body); }, 1200); })
+        .catch(function () {});
     });
 
     body.querySelector('.twitch-disconnect-btn').addEventListener('click', function () {
