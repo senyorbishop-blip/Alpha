@@ -5207,9 +5207,10 @@ let _lastTokenStateRevision = 0;
 // server omits heavy domains (tokens/fog/editor/char_profiles/inventory) whose
 // content did not change. Omitted domains simply lack their payload keys; the
 // state_sync handler only clears/applies a domain when its keys are present.
-window.__stateDomainRevisions = window.__stateDomainRevisions || {};
+const _stateRevisionGlobal = (typeof window !== 'undefined') ? window : ((typeof globalThis !== 'undefined') ? globalThis : {});
+_stateRevisionGlobal.__stateDomainRevisions = _stateRevisionGlobal.__stateDomainRevisions || {};
 function collectKnownStateRevisions() {
-  const out = Object.assign({}, window.__stateDomainRevisions || {});
+  const out = Object.assign({}, _stateRevisionGlobal.__stateDomainRevisions || {});
   const tokenRev = Number(_lastTokenStateRevision || 0);
   if (tokenRev > 0) out.token_state_revision = tokenRev;
   const visRev = Math.max(
@@ -5221,7 +5222,7 @@ function collectKnownStateRevisions() {
   if (invRev > 0) out.inventory_revision = invRev;
   return out;
 }
-window.collectKnownStateRevisions = collectKnownStateRevisions;
+_stateRevisionGlobal.collectKnownStateRevisions = collectKnownStateRevisions;
 
 function _isStaleTokenStateEvent(payload) {
   const rev = Number(payload && payload.token_state_revision);

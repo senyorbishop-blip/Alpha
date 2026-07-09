@@ -653,11 +653,14 @@ async def handle_char_profile_upsert(payload: dict, session: Session, user: User
     if active_profile_id and str(saved_profile.get("id") or "").strip() == active_profile_id:
         _hydrate_active_profile_inventory_state(session, user, saved_profile)
     bump_character_hydration_revisions(session, spells=True, quick_actions=True)
-    await _send_char_profiles(session, user.id)
     # Refresh encumbrance so STR/size changes are reflected immediately.
     # Also recompute equipment AC so DEX changes update token.ac before broadcasting.
+    # This runs BEFORE the stub push: equipment recompute can write back into
+    # the stored profile, and the pushed stub revision must reflect the final
+    # content or clients would invalidate their body cache on the next sync.
     _update_encumbrance_cache(session, user.id)
     _recompute_equipment_effects(session, user)
+    await _send_char_profiles(session, user.id)
     await _broadcast_inventory_state(session)
     _link_owned_tokens_to_profile(session, user, saved_profile)
     await _broadcast_token_state_sync(session)
