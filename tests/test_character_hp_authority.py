@@ -109,8 +109,14 @@ def test_token_hp_update_persists_to_profile_and_rejoin_sync(monkeypatch):
     _sync_player_state_from_profile(session, user, profile)
     assert token.hp == 11
 
+    # Rejoin sync now ships stubs — the updated vitals ride the stub scalars,
+    # and the full body (with nativeRuntime) is served by char_profile_fetch.
     state = session.to_state_dict_for_role("player", user.id)
-    assert state["char_profiles"][0]["nativeRuntime"]["hp"]["current"] == 11
+    stub = state["char_profiles"][0]
+    assert stub["stub"] is True
+    assert stub["curhp"] == 11
+    assert stub["hp"] == 30
+    assert "nativeRuntime" not in stub
 
 
 def test_legacy_export_charsheet_hp_uses_runtime_hp_without_regression():

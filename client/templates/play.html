@@ -5199,6 +5199,31 @@ function _isStaleInventoryPayload(payload) {
 // newer token snapshot/event can be dropped instead of rubber-banding or
 // resurrecting stale token state.
 let _lastTokenStateRevision = 0;
+
+// ── Reconnect delta sync ─────────────────────────────────────────────────────
+// The server tags every state_sync with per-domain content revisions
+// (payload.domain_revisions). On reconnect the client echoes them — plus its
+// live-tracked monotonic counters — via request_state.known_revisions, and the
+// server omits heavy domains (tokens/fog/editor/char_profiles/inventory) whose
+// content did not change. Omitted domains simply lack their payload keys; the
+// state_sync handler only clears/applies a domain when its keys are present.
+const _stateRevisionGlobal = (typeof window !== 'undefined') ? window : ((typeof globalThis !== 'undefined') ? globalThis : {});
+_stateRevisionGlobal.__stateDomainRevisions = _stateRevisionGlobal.__stateDomainRevisions || {};
+function collectKnownStateRevisions() {
+  const out = Object.assign({}, _stateRevisionGlobal.__stateDomainRevisions || {});
+  const tokenRev = Number(_lastTokenStateRevision || 0);
+  if (tokenRev > 0) out.token_state_revision = tokenRev;
+  const visRev = Math.max(
+    Number(_lastVisibilityRevisionByStream.tokens || 0),
+    Number(_lastVisibilityRevisionByStream.combat || 0),
+  );
+  if (visRev > 0) out.visibility_revision = visRev;
+  const invRev = Number((typeof getLastInventoryRevision === 'function' ? getLastInventoryRevision() : 0) || 0);
+  if (invRev > 0) out.inventory_revision = invRev;
+  return out;
+}
+_stateRevisionGlobal.collectKnownStateRevisions = collectKnownStateRevisions;
+
 function _isStaleTokenStateEvent(payload) {
   const rev = Number(payload && payload.token_state_revision);
   if (!Number.isFinite(rev)) return false;
@@ -26754,11 +26779,23 @@ function handleLegacyMessage(msg) {
       window.__stateSyncApplying = true;
       try {
       // Routine state_sync must not re-run authority redirect logic; identity is resolved at boot/ws_preconnect.
+      // Delta reconnect syncs omit unchanged heavy domains entirely — a domain
+      // is only cleared + re-applied when its payload keys are present.
+      // (Full syncs always carry every key, so these guards are no-ops there.)
+      const __syncHasTokens = ('tokens' in p);
+      const __syncHasCharProfiles = ('char_profiles' in p);
+      const __syncHasEditor = ('editor_layers' in p) || ('editor_walls' in p) || ('editor_props' in p);
+      const __syncHasInventory = ('player_inventories' in p) || ('player_inventory' in p);
+      if (p.domain_revisions && typeof p.domain_revisions === 'object') {
+        window.__stateDomainRevisions = { ...p.domain_revisions };
+      }
       // Full state load
-      Object.keys(tokens).forEach(k => delete tokens[k]);
+      if (__syncHasTokens) {
+        Object.keys(tokens).forEach(k => delete tokens[k]);
+        Object.keys(_stagingTokens).forEach(k => delete _stagingTokens[k]);
+        _mapTokensByContext = {};
+      }
       Object.keys(users).forEach(k => delete users[k]);
-      Object.keys(_stagingTokens).forEach(k => delete _stagingTokens[k]);
-      _mapTokensByContext = {};
       Object.keys(journalEntries).forEach(k => delete journalEntries[k]);
       _sessionQuests = [];
       _questBoardBindings = [];
@@ -26773,15 +26810,17 @@ function handleLegacyMessage(msg) {
       _logsSelectedType = null;
       _logsSelectedId   = null;
       itemLibraryEntries = {};
-      charProfiles = [];
-      refreshCharProfileSelect();
+      if (__syncHasCharProfiles) {
+        charProfiles = [];
+        refreshCharProfileSelect();
+      }
 
       _worldMapImageUrl = p.map_image_url || null;
 
       // Token projection into live-map vs staging is intentionally deferred until
       // after map navigation settles below (applyAuthoritativeTokenSync). This keeps
       // one authority path for active-scene token derivation on reconnect/state_sync.
-      const crossScenePlayerTokenCount = Object.values(p.tokens || {}).filter(t => {
+      const crossScenePlayerTokenCount = Object.values((__syncHasTokens && p.tokens) || {}).filter(t => {
         if (!t || !t.owner_id || t.staged) return false;
         const tokenCtx = String(t.map_context || 'world');
         const dmCtx = String((p.dm_map_context && p.dm_map_context !== 'world') ? p.dm_map_context : 'world');
@@ -26817,23 +26856,27 @@ function handleLegacyMessage(msg) {
       loadEncounterTemplates(p.encounter_templates || []);
       if (ROLE === 'dm' && typeof p.dm_notes === 'string') loadDmNotes(p.dm_notes);
       loadItemLibraryEntries(p.item_library_entries || []);
-      loadCharProfiles(p.char_profiles || []);
+      if (__syncHasCharProfiles) loadCharProfiles(p.char_profiles || []);
       initPollFromState(p.active_poll || null);
       _initPollDmControls();
-      _editorLayersAll = preserveDirtyEditorContextInSync('terrain', p.editor_layers || {});
-      if (shouldReloadEditorLayerFromSync('terrain')) ensureEditorLayerLoaded(true);
-      _editorWallsAll = preserveDirtyEditorContextInSync('walls', p.editor_walls || {});
-      if (shouldReloadEditorLayerFromSync('walls')) ensureEditorWallsLoaded(true);
-      _editorPropsAll = preserveDirtyEditorContextInSync('props', p.editor_props || {});
-      if (shouldReloadEditorLayerFromSync('props')) ensureEditorPropsLoaded(true);
-      _mapSettingsAll = { ...(p.map_settings || {}) };
+      if (__syncHasEditor) {
+        _editorLayersAll = preserveDirtyEditorContextInSync('terrain', p.editor_layers || {});
+        if (shouldReloadEditorLayerFromSync('terrain')) ensureEditorLayerLoaded(true);
+        _editorWallsAll = preserveDirtyEditorContextInSync('walls', p.editor_walls || {});
+        if (shouldReloadEditorLayerFromSync('walls')) ensureEditorWallsLoaded(true);
+        _editorPropsAll = preserveDirtyEditorContextInSync('props', p.editor_props || {});
+        if (shouldReloadEditorLayerFromSync('props')) ensureEditorPropsLoaded(true);
+        _mapSettingsAll = { ...(p.map_settings || {}) };
+      }
       applyGridSizeFromSettings();
       refreshPingPermissionUi();
       if (currentTool === 'ping' && !canCurrentUserPingMap(false)) setTool('select');
-      _editorPathsAll = { ...(p.editor_paths || {}) };
-      _editorLabelsAll = { ...(p.editor_labels || {}) };
-      _editorMarkersAll = { ...(p.editor_markers || {}) };
-      _editorLightsAll = { ...(p.editor_lights || {}) };
+      if (__syncHasEditor) {
+        _editorPathsAll = { ...(p.editor_paths || {}) };
+        _editorLabelsAll = { ...(p.editor_labels || {}) };
+        _editorMarkersAll = { ...(p.editor_markers || {}) };
+        _editorLightsAll = { ...(p.editor_lights || {}) };
+      }
       viewerProfiles = { ...(p.viewer_profiles || {}) };
       viewerPendingActions = { ...(p.viewer_pending_actions || {}) };
       viewerPowerCatalog = { ...(p.viewer_power_catalog || {}) };
@@ -26846,9 +26889,11 @@ function handleLegacyMessage(msg) {
       corpseDmConfig = { ...(p.corpse_dm_config || {}) };
       renderEconomyCampaignSettings();
       if (_hazardEditZoneId && !hazardZones[_hazardEditZoneId]) _hazardEditZoneId = '';
-      ensureEditorPathsLoaded(true);
-      ensureEditorLabelsLoaded(true);
-      ensureEditorMarkersLoaded(true);
+      if (__syncHasEditor) {
+        ensureEditorPathsLoaded(true);
+        ensureEditorLabelsLoaded(true);
+        ensureEditorMarkersLoaded(true);
+      }
       renderHazardZones();
 
       // Load POIs
@@ -26937,7 +26982,9 @@ function handleLegacyMessage(msg) {
       // token_state_revision ordering, but we still route it through the shared apply
       // path so revision/suppression tracking starts from a known-correct baseline.
       _lastTokenStateRevision = Math.max(_lastTokenStateRevision, Number(p.token_state_revision) || 0);
-      applyAuthoritativeTokenSnapshot({ tokens: p.tokens || {}, token_state_revision: _lastTokenStateRevision }, 'state_sync');
+      if (__syncHasTokens) {
+        applyAuthoritativeTokenSnapshot({ tokens: p.tokens || {}, token_state_revision: _lastTokenStateRevision }, 'state_sync');
+      }
       applyAuthoritativeMapContext({ dm_map_context: dmCtx, nav_version: Number(p.map_nav_version) || 0, map_mode: onLocal ? 'local' : 'world' }, 'state_sync');
       if (ROLE === 'dm' && crossScenePlayerTokenCount > 0) {
         setTimeout(() => showToast(`${crossScenePlayerTokenCount} token${crossScenePlayerTokenCount>1?'s':''} in staging from other maps`), 800);
@@ -26977,7 +27024,7 @@ function handleLegacyMessage(msg) {
       }
       requestRenderFrame('state_sync render');
       liveDebugLog('state_sync applied', buildClientLiveStateSummary('state_sync', p, { hidden_tokens_filtered: Number(p.hidden_tokens_filtered) || undefined, fog_hidden_tokens_filtered: Number(p.fog_hidden_tokens_filtered) || undefined }));
-      const _stateSyncInventoryStale = _isStaleInventoryPayload(p);
+      const _stateSyncInventoryStale = __syncHasInventory ? _isStaleInventoryPayload(p) : true;
       liveDebugLog('state_sync inventory ' + (_stateSyncInventoryStale ? 'ignored' : 'applied'), buildClientLiveStateSummary('state_sync', p, { ignored: _stateSyncInventoryStale }));
       if (!_stateSyncInventoryStale) applyPlayerInventoryState(p);
       if (p.quick_actions && typeof p.quick_actions === 'object') applyQuickActionsSync(p.quick_actions, 'state_sync');
@@ -27298,6 +27345,37 @@ function handleLegacyMessage(msg) {
         renderItemLibraryList();
       }
       if (!version || _pendingSrdItemsVersion === version) _pendingSrdItemsVersion = '';
+      break;
+    }
+
+    case 'party_loot_log_response': {
+      // Older loot entries fetched on demand (sync ships only the newest 50).
+      const older = Array.isArray(p.entries) ? p.entries.filter(x => x && typeof x === 'object') : [];
+      if (older.length) {
+        const seen = new Set((partyLootLog || []).map(e => String(e?.id || '')));
+        const merged = older.filter(e => !seen.has(String(e?.id || ''))).concat(partyLootLog || []);
+        partyLootLog = merged.slice(-120);
+        renderInventoryPanel();
+      }
+      break;
+    }
+
+    case 'char_profile_response': {
+      // On-demand full profile body (sync only carries stubs).
+      const rid = String(p.id || (p.profile && p.profile.id) || '').trim();
+      if (p.ok && p.profile && typeof p.profile === 'object') {
+        const full = p.profile;
+        const rev = parseInt(p.revision, 10) || 0;
+        if (rev) full.revision = rev;
+        delete full.stub;
+        const idx = charProfiles.findIndex(x => String(x?.id || '') === rid);
+        if (idx >= 0) charProfiles[idx] = full; else charProfiles.push(full);
+        _resolveCharProfileFetch(rid, full);
+      } else {
+        // Never render an empty sheet silently — surface every denial/miss.
+        showToast('⚠ ' + String(p.error || 'Could not load character profile.'));
+        _resolveCharProfileFetch(rid, null);
+      }
       break;
     }
 
@@ -29306,6 +29384,17 @@ function openNativeCharacterBuilder() {
     const activeProfile = (Array.isArray(charProfiles) && activeProfileId)
       ? (charProfiles.find(p => String(p?.id || '') === String(activeProfileId)) || null)
       : null;
+    if (activeProfile && !charProfileHasBody(activeProfile)) {
+      // Stub only — fetch the body first so the builder seeds from real data.
+      showToast('Loading character…');
+      ensureCharProfileBody(activeProfileId, (full) => {
+        const draftSeed = _buildBuilderDraftFromProfile(full || {});
+        if (draftSeed) _nativeBuilderState.replaceDraft(draftSeed, { markDirty: false });
+        modal.style.display = 'flex';
+        shell.open();
+      });
+      return;
+    }
     const draftSeed = _buildBuilderDraftFromProfile(activeProfile || {});
     if (draftSeed) _nativeBuilderState.replaceDraft(draftSeed, { markDirty: false });
   }
@@ -35819,9 +35908,75 @@ function applyCharProfileRecord(p, opts = {}) {
   }
 }
 
+// ── Character profile stubs & on-demand body fetch ──────────────────────────
+// state_sync / char_profiles_sync now carry lightweight stubs (stub: true, no
+// charSheet/nativeCharacter/nativeRuntime bodies). The full body is requested
+// with char_profile_fetch and spliced back into `charProfiles`, so every
+// existing reader keeps working once the body is present. Each stub carries a
+// server content `revision`; a cached body stays valid while revisions match.
+const _pendingCharProfileFetches = new Map(); // profile id -> { callbacks, timer }
+const _pendingLocalCharUpsertIds = new Set(); // upserts sent by THIS client awaiting their stub echo
+
+function charProfileHasBody(p) {
+  return !!(p && typeof p === 'object' && !p.stub
+    && (p.charSheet !== undefined || p.nativeCharacter !== undefined || p.charBook !== undefined));
+}
+
+function ensureCharProfileBody(profileId, cb) {
+  const id = String(profileId || '').trim();
+  if (!id) { if (typeof cb === 'function') cb(null); return; }
+  const entry = (Array.isArray(charProfiles) ? charProfiles : []).find(p => String(p?.id || '') === id) || null;
+  if (entry && charProfileHasBody(entry)) { if (typeof cb === 'function') cb(entry); return; }
+  let pending = _pendingCharProfileFetches.get(id);
+  if (!pending) {
+    pending = { callbacks: [], timer: 0 };
+    pending.timer = setTimeout(() => {
+      if (_pendingCharProfileFetches.get(id) !== pending) return;
+      _pendingCharProfileFetches.delete(id);
+      showToast('⚠ Timed out loading character profile. Check your connection and try again.');
+      pending.callbacks.forEach(fn => { try { fn(null); } catch {} });
+    }, 12000);
+    _pendingCharProfileFetches.set(id, pending);
+    sendWS({ type: 'char_profile_fetch', payload: { id } });
+  }
+  if (typeof cb === 'function') pending.callbacks.push(cb);
+}
+
+function _resolveCharProfileFetch(profileId, profileOrNull) {
+  const id = String(profileId || '').trim();
+  const pending = _pendingCharProfileFetches.get(id);
+  if (!pending) return;
+  _pendingCharProfileFetches.delete(id);
+  clearTimeout(pending.timer);
+  pending.callbacks.forEach(fn => { try { fn(profileOrNull); } catch {} });
+}
+
+function _mergeCharProfileStubs(entries) {
+  const incoming = Array.isArray(entries) ? entries.slice() : [];
+  const prevById = new Map((Array.isArray(charProfiles) ? charProfiles : []).map(p => [String(p?.id || ''), p]));
+  return incoming.map(p => {
+    const id = String(p?.id || '');
+    const prev = prevById.get(id);
+    if (!p || !p.stub || !prev || !charProfileHasBody(prev)) return p;
+    const newRev = parseInt(p.revision, 10) || 0;
+    const prevRev = parseInt(prev.revision, 10) || 0;
+    const localUpsert = _pendingLocalCharUpsertIds.has(id);
+    if (localUpsert) _pendingLocalCharUpsertIds.delete(id);
+    if (localUpsert || (newRev && prevRev && newRev === prevRev)) {
+      // Keep the cached full body; adopt the fresh stub scalars + revision.
+      const merged = { ...prev, ...p, stub: false, revision: newRev || prevRev };
+      for (const key of ['charSheet', 'nativeCharacter', 'nativeRuntime', 'charBook', 'characterNotes']) {
+        if (prev[key] !== undefined) merged[key] = prev[key];
+      }
+      return merged;
+    }
+    return p; // profile changed on the server → drop the stale body; re-fetch on open
+  });
+}
+
 function loadCharProfiles(entries) {
   const prevActive = _activeCharProfileId || document.getElementById('char-profile-select')?.value || '';
-  charProfiles = Array.isArray(entries) ? entries.slice() : [];
+  charProfiles = _mergeCharProfileStubs(entries);
   const activeFromServer = charProfiles.find(p => String(p?.id || '') === String(prevActive || _activeCharProfileId || '')) || null;
   if (activeFromServer) {
     const serverHash = getCharProfileDraftHash(activeFromServer);
@@ -36326,6 +36481,14 @@ function saveCurrentCharProfile(opts = {}) {
     }
     rememberActiveCharProfile(profile.id);
     persistCurrentCharProfileDraft(profile);
+    // Track the in-flight upsert so the stub echo from the server adopts the
+    // new revision instead of invalidating the body we just built locally.
+    _pendingLocalCharUpsertIds.add(String(profile.id || ''));
+    {
+      const savedIdx = charProfiles.findIndex(p => String(p?.id || '') === String(profile.id || ''));
+      if (savedIdx >= 0) charProfiles[savedIdx] = { ...charProfiles[savedIdx], ...profile, stub: false };
+      else charProfiles.push(profile);
+    }
     sendWS({ type: 'char_profile_upsert', payload: profile });
     markCharProfileClean(profile);
     if (!opts.silent) showToast(`Saved profile: ${profile.name}`);
@@ -36354,6 +36517,13 @@ function loadSelectedCharProfile(opts = {}) {
   const p = charProfiles.find(x => x.id === id);
   if (!p) return;
   if (sel && sel.value !== id) sel.value = id;
+  if (!charProfileHasBody(p)) {
+    // Sync only shipped a stub — fetch the full body, then apply it.
+    ensureCharProfileBody(id, (full) => {
+      if (full) applyCharProfileRecord(full, opts || {});
+    });
+    return;
+  }
   applyCharProfileRecord(p, opts || {});
 }
 

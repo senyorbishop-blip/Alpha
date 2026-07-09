@@ -27,7 +27,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.responses import FileResponse
 
 from server.session import get_session
-from server.db import init_db, save_campaign_async, load_campaign, create_creature
+from server.db import init_db, migrate_char_profiles_dedup, save_campaign_async, load_campaign, create_creature
 from server.paths import DATA_DIR, DB_PATH, MAPS_DIR, BACKUPS_DIR, ensure_data_dirs, migrate_legacy_data, create_startup_backup
 from server.connections import manager
 from server.handlers import handle_message
@@ -189,6 +189,9 @@ async def lifespan(app):
     migration = migrate_legacy_data()
     backup_path = create_startup_backup()
     init_db()
+    # One-time storage-layout dedup of persisted char_profiles (idempotent;
+    # runs only after create_startup_backup() above so it is always revertible).
+    migrate_char_profiles_dedup()
     init_map_library_db()
     init_auth_db()
     legacy_user_migration = merge_legacy_users_from_db()
@@ -767,31 +770,46 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, user_id: str
         except Exception:
             logger.exception("[chat-bridge] auto-start scheduling failed")
 
-    # Send full state on connect (DM gets POI dm_notes, others don't)
-    state = session.to_state_dict_for_role(user.role, user_id)
-    logger.info("[live_state] initial_state_sync %s", build_live_state_debug_summary(session, user_id, user.role, state))
-    await manager.send_to(session_id, user_id, {
-        "type": "state_sync",
-        "payload": state
-    })
-    try:
-        setattr(user, "_last_initial_state_sync_at", time.monotonic())
-    except Exception:
-        pass
-    snapshot_v2 = session.to_authoritative_snapshot_for_role(user.role, user_id, source="ws_connect")
-    snapshot_payload = snapshot_v2.get("payload") if isinstance(snapshot_v2.get("payload"), dict) else {}
-    character_block = snapshot_payload.get("character") if isinstance(snapshot_payload.get("character"), dict) else {}
-    inventory_block = snapshot_payload.get("inventory") if isinstance(snapshot_payload.get("inventory"), dict) else {}
-    spells_block = snapshot_payload.get("spells") if isinstance(snapshot_payload.get("spells"), dict) else {}
-    logger.info(
-        "[live_state] snapshot_character_block session_id=%s user_id=%s active_profile_id=%s character_hydration=%s inventory_hydration=%s spells_hydration=%s",
-        session_id, user_id,
-        character_block.get("active_profile_id") or "",
-        character_block.get("hydration_status") or "unknown",
-        inventory_block.get("hydration_status") or "unknown",
-        spells_block.get("hydration_status") or "unknown",
-    )
-    await manager.send_to(session_id, user_id, snapshot_v2)
+    # Send full state on connect (DM gets POI dm_notes, others don't).
+    # Reconnects (client passes ?reason=reconnect) skip this unconditional
+    # send: every current client immediately issues request_state with its
+    # known per-domain revisions, and handle_request_state answers with a
+    # delta that omits unchanged heavy domains (server/state_delta.py).
+    defer_state_to_request = str(reason or "").strip().lower() == "reconnect"
+    if defer_state_to_request:
+        logger.info(
+            "[live_state] initial_state_sync deferred to request_state (reconnect delta) session_id=%s user_id=%s",
+            session_id, user_id,
+        )
+    else:
+        from server.state_delta import apply_reconnect_delta
+        state = session.to_state_dict_for_role(user.role, user_id)
+        # Fresh connect: nothing known client-side, so no domain is omitted —
+        # this only attaches domain_revisions for the client to echo later.
+        apply_reconnect_delta(state, None)
+        logger.info("[live_state] initial_state_sync %s", build_live_state_debug_summary(session, user_id, user.role, state))
+        await manager.send_to(session_id, user_id, {
+            "type": "state_sync",
+            "payload": state
+        })
+        try:
+            setattr(user, "_last_initial_state_sync_at", time.monotonic())
+        except Exception:
+            pass
+        snapshot_v2 = session.to_authoritative_snapshot_for_role(user.role, user_id, source="ws_connect")
+        snapshot_payload = snapshot_v2.get("payload") if isinstance(snapshot_v2.get("payload"), dict) else {}
+        character_block = snapshot_payload.get("character") if isinstance(snapshot_payload.get("character"), dict) else {}
+        inventory_block = snapshot_payload.get("inventory") if isinstance(snapshot_payload.get("inventory"), dict) else {}
+        spells_block = snapshot_payload.get("spells") if isinstance(snapshot_payload.get("spells"), dict) else {}
+        logger.info(
+            "[live_state] snapshot_character_block session_id=%s user_id=%s active_profile_id=%s character_hydration=%s inventory_hydration=%s spells_hydration=%s",
+            session_id, user_id,
+            character_block.get("active_profile_id") or "",
+            character_block.get("hydration_status") or "unknown",
+            inventory_block.get("hydration_status") or "unknown",
+            spells_block.get("hydration_status") or "unknown",
+        )
+        await manager.send_to(session_id, user_id, snapshot_v2)
 
     # Send item library sync with only the SRD version.  The SRD list is large,
     # so clients request it separately only when their local versioned cache is
@@ -1091,4 +1109,8 @@ async def api_srd_item_count():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=PORT, reload=False, access_log=False)
+    # ws_per_message_deflate: explicit so WebSocket compression can never be
+    # lost to a changed uvicorn default. The repetitive JSON in state/token
+    # sync compresses ~5-10x on the wire (see [ws] outbound_send
+    # deflate_estimate_bytes in the payload logs).
+    uvicorn.run(app, host="0.0.0.0", port=PORT, reload=False, access_log=False, ws_per_message_deflate=True)

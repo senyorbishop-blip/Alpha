@@ -7,6 +7,7 @@ import logging
 import os
 import time
 import uuid
+import zlib
 from server.payload_diagnostics import log_payload_size_diagnostic, log_top_level_payload_keys
 from typing import Dict, Set, Optional
 from fastapi import WebSocket
@@ -241,6 +242,24 @@ class ConnectionManager:
                 message_type=message_type, byte_size=byte_size, duration_ms=duration_ms,
             )
 
+    def _log_deflate_estimate(self, session_id: str, user_id: str, message_type: str, payload: str, byte_size: int) -> None:
+        """For oversized frames, log the approximate on-the-wire size under
+        permessage-deflate so raw-vs-compressed can be compared in one place.
+        Only runs on frames already past the warn threshold (rate-limited by
+        the caller), so the extra zlib pass costs nothing in the hot path."""
+        if byte_size <= PAYLOAD_WARN_BYTES:
+            return
+        try:
+            deflate_bytes = len(zlib.compress(payload.encode("utf-8"), 6))
+        except Exception:
+            return
+        logger.warning(
+            "[ws] outbound_send_deflate_estimate message_type=%s session_id=%s recipient_user_id=%s "
+            "byte_size=%s deflate_estimate_bytes=%s ratio=%.1fx",
+            message_type or "unknown", session_id, user_id, byte_size, deflate_bytes,
+            (byte_size / deflate_bytes) if deflate_bytes else 0.0,
+        )
+
     async def send_to(self, session_id: str, user_id: str, message: dict) -> bool:
         ws = self._connections.get(session_id, {}).get(user_id)
         if ws:
@@ -248,6 +267,7 @@ class ConnectionManager:
                 payload, byte_size = self._encode_payload(message)
                 if _payload_log_allowed(session_id, str(message.get("type") or "unknown") + ":breakdown"):
                     log_top_level_payload_keys(logger, session_id=session_id, recipient_user_id=user_id, recipient_role=self._role_for(session_id, user_id), message=message, byte_size=byte_size)
+                    self._log_deflate_estimate(session_id, user_id, str(message.get("type") or "unknown"), payload, byte_size)
                 await self._send_payload(
                     ws,
                     payload,

@@ -106,6 +106,15 @@ def log_top_level_payload_keys(logger: logging.Logger, *, session_id: str, recip
         ",".join(f"{key}:{size}" for key, size in top),
     )
 
+def deflate_byte_size(message: dict[str, Any]) -> int:
+    """Approximate on-the-wire size of a frame under permessage-deflate."""
+    import zlib
+    try:
+        return len(zlib.compress(json.dumps(message).encode("utf-8"), 6))
+    except Exception:
+        return 0
+
+
 def build_payload_size_report_for_role(session, role: str, user_id: str) -> dict[str, Any]:
     """Build a metadata-only sample payload size report for one session role."""
     state_message = {"type": "state_sync", "payload": session.to_state_dict_for_role(role, user_id)}
@@ -116,6 +125,7 @@ def build_payload_size_report_for_role(session, role: str, user_id: str) -> dict
         "session_id": str(getattr(session, "id", "") or ""),
         "messages": {
             "state_sync": payload_byte_size(state_message),
+            "state_sync_deflate": deflate_byte_size(state_message),
             "authoritative_snapshot": payload_byte_size(snapshot_message),
         },
     }

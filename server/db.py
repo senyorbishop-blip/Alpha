@@ -130,6 +130,11 @@ def _deserialize_campaign_field(campaign_id: str, field: str, raw: Any) -> Any:
         expected_type = type(fallback).__name__
         _log_campaign_field_issue("load", campaign_id, field, "invalid_shape", f"expected={expected_type} got={actual_type}")
         return json.loads(_json_dumps_compact(fallback))
+    if field == "char_profiles":
+        # Stored rows may be dedup storage-shaped; runtime code only ever
+        # sees fully hydrated profiles.
+        from server.character.profile_dedup import hydrate_char_profiles_from_storage
+        value = hydrate_char_profiles_from_storage(value)
     return value
 
 
@@ -137,6 +142,11 @@ def _serialize_campaign_field(campaign_id: str, field: str, value: Any) -> str:
     try:
         if field == "fog_maps":
             serialized = _safe_fog_json(value)
+        elif field == "char_profiles":
+            # Persist with shared subtrees stored once (storage layout only —
+            # the live session object is not touched; loads re-hydrate).
+            from server.character.profile_dedup import dedupe_char_profiles_for_storage
+            serialized = _json_dumps_compact(dedupe_char_profiles_for_storage(value))
         else:
             serialized = _json_dumps_compact(value)
     except Exception as exc:
@@ -220,6 +230,78 @@ async def save_campaign_async(session) -> bool:
     """Non-blocking save — runs save_campaign in a thread pool."""
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(_db_executor, save_campaign, session)
+
+
+def migrate_char_profiles_dedup() -> dict:
+    """One-time (idempotent) rewrite of persisted char_profiles with shared
+    subtrees stored once.
+
+    Runs at startup AFTER create_startup_backup(), so the pre-migration state
+    is always recoverable from DATA_DIR/backups. Each campaign row is only
+    rewritten when the dedup round-trip is verified content-identical AND the
+    serialized field actually shrinks; otherwise the row is left untouched and
+    the reason is logged. Before/after byte sizes are logged per campaign.
+    """
+    from server.character.profile_dedup import (
+        char_profiles_roundtrip_ok,
+        dedupe_char_profiles_for_storage,
+        hydrate_char_profiles_from_storage,
+    )
+
+    stats = {"campaigns": 0, "rewritten": 0, "skipped": 0, "bytes_before": 0, "bytes_after": 0}
+    try:
+        with get_conn() as conn:
+            rows = conn.execute("SELECT id, char_profiles FROM campaigns").fetchall()
+    except Exception as exc:
+        logger.error("[DB] char_profiles dedup migration scan failed: %s", exc)
+        return stats
+
+    for row in rows:
+        campaign_id = row["id"]
+        raw = row["char_profiles"]
+        if not raw or raw in ("{}", "null"):
+            continue
+        stats["campaigns"] += 1
+        try:
+            stored = json.loads(raw)
+            if not isinstance(stored, dict):
+                continue
+            hydrated = hydrate_char_profiles_from_storage(stored)
+            if not char_profiles_roundtrip_ok(hydrated):
+                logger.error(
+                    "[DB] char_profiles dedup migration skipped campaign=%s reason=roundtrip_mismatch",
+                    campaign_id,
+                )
+                stats["skipped"] += 1
+                continue
+            deduped = dedupe_char_profiles_for_storage(hydrated)
+            new_raw = _json_dumps_compact(deduped)
+            before, after = len(raw), len(new_raw)
+            if after >= before:
+                stats["skipped"] += 1
+                continue
+            with get_conn() as conn:
+                conn.execute(
+                    "UPDATE campaigns SET char_profiles=? WHERE id=?",
+                    (new_raw, campaign_id),
+                )
+                conn.commit()
+            stats["rewritten"] += 1
+            stats["bytes_before"] += before
+            stats["bytes_after"] += after
+            logger.info(
+                "[DB] char_profiles dedup migration campaign=%s bytes_before=%s bytes_after=%s saved=%s (%.1f%%)",
+                campaign_id, before, after, before - after, (before - after) * 100.0 / before,
+            )
+        except Exception as exc:
+            stats["skipped"] += 1
+            logger.error("[DB] char_profiles dedup migration failed campaign=%s error=%s", campaign_id, exc)
+    if stats["rewritten"]:
+        logger.info(
+            "[DB] char_profiles dedup migration complete campaigns=%s rewritten=%s skipped=%s total_bytes %s -> %s",
+            stats["campaigns"], stats["rewritten"], stats["skipped"], stats["bytes_before"], stats["bytes_after"],
+        )
+    return stats
 
 
 def init_db():

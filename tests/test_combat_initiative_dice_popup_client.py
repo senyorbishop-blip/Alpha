@@ -53,7 +53,9 @@ def test_reconnect_requests_combat_state_when_active():
 def test_state_sync_applies_combat_on_reconnect():
     src = PLAY.read_text(encoding="utf-8")
     # state_sync must restore combat so active initiative survives a reconnect.
-    sync_block = src[src.index("case 'state_sync': {"):src.index("case 'state_sync': {") + 12000]
+    # Window sized to reach the combat apply even with the reconnect-delta
+    # presence guards added ahead of it in the handler.
+    sync_block = src[src.index("case 'state_sync': {"):src.index("case 'state_sync': {") + 16000]
     assert "if (p.combat !== undefined) {" in sync_block
     # combatApplyState now takes a source argument identifying the apply path.
     assert "combatApplyState(p.combat, 'state_sync');" in sync_block

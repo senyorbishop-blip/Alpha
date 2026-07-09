@@ -42,5 +42,7 @@ VOLUME ["/data"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD curl -fsS "http://localhost:${PORT}/health" || exit 1
 
-# Serve via uvicorn. PORT is overridable at runtime.
-CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT}"]
+# Serve via uvicorn. PORT is overridable at runtime. WebSocket
+# per-message-deflate is pinned on explicitly (repetitive sync JSON
+# compresses ~5-10x on the wire).
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT} --ws-per-message-deflate true"]

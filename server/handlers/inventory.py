@@ -25,6 +25,7 @@ from server.session import (
     get_player_gold_for_user,
     set_player_gold_for_user,
     get_party_stash_inventory,
+    PARTY_LOOT_LOG_SYNC_LIMIT,
     PARTY_STASH_KEY,
     _user_bucket_key,
     _inventory_owner_key,
@@ -761,7 +762,7 @@ async def _send_inventory_state(session: Session, user_id: str):
     if not user:
         return
     payload = {
-        "party_loot_log": list(getattr(session, "party_loot_log", []) or [])[-120:],
+        "party_loot_log": list(getattr(session, "party_loot_log", []) or [])[-PARTY_LOOT_LOG_SYNC_LIMIT:],
         "party_stash": get_party_stash_inventory(session),
         "encumbrance_settings": dict(getattr(session, "encumbrance_settings", {}) or {}),
         "inventory_revision": int(getattr(session, "inventory_revision", 0) or 0),
@@ -823,6 +824,26 @@ def _append_party_loot_log(session: Session, entry: dict):
         **dict(entry or {}),
     })
     session.party_loot_log = logs[-120:]
+
+
+async def handle_party_loot_log_fetch(payload: dict, session: Session, user: User):
+    """On-demand fetch of loot-log entries older than the synced tail.
+
+    Sync payloads carry only the newest PARTY_LOOT_LOG_SYNC_LIMIT entries;
+    ``have`` is how many newest entries the client already holds. Mirrors
+    today's sync visibility: only DM and players see the loot log at all.
+    """
+    if str(getattr(user, "role", "") or "").strip().lower() not in {"dm", "player"}:
+        return
+    logs = list(getattr(session, "party_loot_log", []) or [])
+    have = _safe_int((payload or {}).get("have"), PARTY_LOOT_LOG_SYNC_LIMIT, minimum=0, maximum=500)
+    limit = _safe_int((payload or {}).get("limit"), PARTY_LOOT_LOG_SYNC_LIMIT, minimum=1, maximum=120)
+    older = logs[:-have] if have else logs
+    await manager.send_to(session.id, user.id, {"type": "party_loot_log_response", "payload": {
+        "entries": older[-limit:],
+        "total": len(logs),
+        "have": have,
+    }})
 
 
 def _set_player_inventory_items(session: Session, user: User, items: list[dict]):

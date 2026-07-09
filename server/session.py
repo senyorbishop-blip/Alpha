@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from copy import deepcopy
 from server.encumbrance import auto_tag_extradimensional
 from server.quest_premium_progression import build_premium_progression_snapshot
-from server.character.profile_assets import sanitize_profiles_for_websocket
+from server.character.profile_stub import build_char_profile_stub_list, build_char_profile_stub_map
 
 
 def display_user_handle(session_id: str, user_id: str) -> str:
@@ -50,6 +50,10 @@ def normalize_map_context_from_payload(payload: dict | None, *, fallback: str = 
         if key in data and str(data.get(key) or "").strip():
             return normalize_map_context(data.get(key), fallback=fallback)
     return normalize_map_context(fallback)
+
+# Newest party-loot entries shipped in state/inventory sync payloads. Older
+# entries (storage keeps 120) are available via party_loot_log_fetch.
+PARTY_LOOT_LOG_SYNC_LIMIT = 50
 
 def normalize_fog_maps(fog_maps: dict | None) -> dict:
     normalized = {}
@@ -878,7 +882,9 @@ class Session:
             "party_memory_log": list(self.party_memory_log or []),
             "library_entries": list(self.library_entries or []),
             "item_library_entries": list(self.item_library_entries or []),
-            "char_profiles": sanitize_profiles_for_websocket(dict(self.char_profiles or {})),
+            # Sync ships lightweight stubs only; full profile bodies are
+            # fetched on demand via char_profile_fetch (see profile_stub.py).
+            "char_profiles": build_char_profile_stub_map(dict(self.char_profiles or {})),
             "active_char_profiles": dict(self.active_char_profiles or {}),
             "player_gold": dict(self.player_gold or {}),
             "editor_layers": dict(self.editor_layers or {}),
@@ -1185,10 +1191,11 @@ class Session:
             d["codex_links"] = list(self.codex_links or [])
             d["library_entries"] = list(self.library_entries or [])
             d["item_library_entries"] = list(self.item_library_entries or [])
-            # char_profiles already sanitized by to_state_dict(); reuse to avoid double sanitization.
+            # char_profiles is already the stub map from to_state_dict(); the DM
+            # fetches any full body on demand via char_profile_fetch.
             d["player_inventories"] = build_player_inventory_payload_for_dm(self)
             d["party_stash"] = get_party_stash_inventory(self)
-            d["party_loot_log"] = list(self.party_loot_log or [])[-120:]
+            d["party_loot_log"] = list(self.party_loot_log or [])[-PARTY_LOOT_LOG_SYNC_LIMIT:]
             d["player_gold"] = dict(self.player_gold or {})
             d["editor_layers"] = dict(self.editor_layers or {})
             d["editor_walls"] = dict(self.editor_walls or {})
@@ -1255,7 +1262,7 @@ class Session:
                 mine = list(profiles.get(owner_key, []) or [])
                 if not mine and user_id in profiles:
                     mine = list(profiles.get(user_id, []) or [])
-                d["char_profiles"] = sanitize_profiles_for_websocket(mine)
+                d["char_profiles"] = build_char_profile_stub_list(mine)
             else:
                 d["char_profiles"] = []
             if role == "player" and user_id:
@@ -1263,7 +1270,7 @@ class Session:
                 d["party_stash"] = get_party_stash_inventory(self)
                 d["player_gold"] = get_player_gold_for_user(self, user_id)
                 d["active_char_profile_id"] = str((self.active_char_profiles or {}).get(user_id) or "")
-                d["party_loot_log"] = list(self.party_loot_log or [])[-120:]
+                d["party_loot_log"] = list(self.party_loot_log or [])[-PARTY_LOOT_LOG_SYNC_LIMIT:]
                 d["saved_discoveries"] = self._saved_discovery_cards_for_user(user_id)
                 try:
                     d["quick_actions"] = build_quick_actions_sync_payload(self, user_id)
