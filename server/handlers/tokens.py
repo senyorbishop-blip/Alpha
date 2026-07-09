@@ -12,6 +12,8 @@ from server.handlers.common import (
     _broadcast_token_state_sync,
     _broadcast_token_visibility,
     _sync_combatant_token_state,
+    _persist_token_hp_to_owned_profiles,
+    _profile_owner_keys_for_token_owner,
     _broadcast_combat,
     _sanitize_save_bonuses,
     bump_visibility_revision,
@@ -72,73 +74,9 @@ def _safe_int(value, fallback: int = 0, *, minimum: int | None = None) -> int:
     return parsed
 
 
-def _profile_owner_keys_for_token_owner(session: Session, owner_id: str) -> list[str]:
-    keys: list[str] = []
-    owner = str(owner_id or "").strip()
-    if not owner:
-        return keys
-    keys.append(owner)
-    user = (getattr(session, "users", {}) or {}).get(owner)
-    if user is not None:
-        name_key = normalize_profile_owner_key(getattr(user, "name", ""))
-        if name_key and name_key not in keys:
-            keys.append(name_key)
-    return keys
-
-
-def _persist_token_hp_to_owned_profiles(session: Session, token) -> bool:
-    owner_id = str(getattr(token, "owner_id", "") or "").strip()
-    if not owner_id:
-        return False
-    profiles = dict(getattr(session, "char_profiles", {}) or {})
-    active_profile_id = str((getattr(session, "active_char_profiles", {}) or {}).get(owner_id) or "").strip()
-    changed = False
-    for owner_key in _profile_owner_keys_for_token_owner(session, owner_id):
-        rows = list(profiles.get(owner_key) or [])
-        bucket_changed = False
-        for idx, row in enumerate(rows):
-            if not isinstance(row, dict):
-                continue
-            if active_profile_id and str(row.get("id") or "").strip() != active_profile_id:
-                continue
-            runtime = row.get("nativeRuntime") if isinstance(row.get("nativeRuntime"), dict) else {}
-            hp = runtime.get("hp") if isinstance(runtime.get("hp"), dict) else {}
-            hp["max"] = _safe_int(getattr(token, "max_hp", 1), 1, minimum=1)
-            hp["current"] = _safe_int(getattr(token, "hp", 0), 0, minimum=0)
-            hp["temp"] = _safe_int(getattr(token, "temp_hp", 0), 0, minimum=0)
-            hp["current"] = min(hp["current"], hp["max"])
-            runtime["hp"] = hp
-            combat = runtime.get("combat") if isinstance(runtime.get("combat"), dict) else {}
-            combat["maxHP"] = hp["max"]
-            combat["currentHP"] = hp["current"]
-            combat["tempHP"] = hp["temp"]
-            runtime["combat"] = combat
-            row["nativeRuntime"] = runtime
-            row["curhp"] = hp["current"]
-            row["hp"] = hp["max"]
-            row["tempHp"] = hp["temp"]
-            char_book = row.get("charBook") if isinstance(row.get("charBook"), dict) else {}
-            char_book["maxHp"] = hp["max"]
-            char_book["currentHp"] = hp["current"]
-            char_book["tempHp"] = hp["temp"]
-            row["charBook"] = char_book
-            char_sheet = row.get("charSheet") if isinstance(row.get("charSheet"), dict) else {}
-            sheet_hp = char_sheet.get("hp") if isinstance(char_sheet.get("hp"), dict) else {}
-            sheet_hp["max"] = hp["max"]
-            sheet_hp["current"] = hp["current"]
-            sheet_hp["temp"] = hp["temp"]
-            char_sheet["hp"] = sheet_hp
-            row["charSheet"] = char_sheet
-            rows[idx] = row
-            bucket_changed = True
-            if active_profile_id:
-                break
-        if bucket_changed:
-            profiles[owner_key] = rows
-            changed = True
-    if changed:
-        session.char_profiles = profiles
-    return changed
+# _profile_owner_keys_for_token_owner / _persist_token_hp_to_owned_profiles now
+# live in server/handlers/common.py so every HP-mutating handler (viewer powers,
+# hazards, rests, combat) shares the same profile mirror; imported above.
 
 
 def _point_in_scene_trigger_bounds(x: float, y: float, bounds: dict) -> bool:

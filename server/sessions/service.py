@@ -127,21 +127,30 @@ def _sync_player_state_from_profile(session, user, profile: dict) -> None:
         cur_hp = sheet_hp.get("current")
     if temp_hp is None:
         temp_hp = sheet_hp.get("temp")
+    # The sheet/profile is authoritative for max HP and derived stats; the
+    # live token is authoritative for current/temp HP — claiming or rejoining
+    # must never undo damage dealt during the session. Current HP is seeded
+    # from the profile only when the token has no live HP yet.
     try:
         if max_hp is not None:
             keep.max_hp = max(1, int(max_hp))
     except Exception:
         pass
+    if getattr(keep, "hp", None) is None:
+        try:
+            if cur_hp is not None:
+                keep.hp = max(0, int(cur_hp))
+        except Exception:
+            pass
+        try:
+            if temp_hp is not None:
+                keep.temp_hp = max(0, int(temp_hp))
+        except Exception:
+            pass
+    # A sheet edit may have lowered max HP below the live current HP — clamp.
     try:
-        if cur_hp is not None:
-            keep.hp = max(0, int(cur_hp))
-            if keep.max_hp is not None:
-                keep.hp = min(keep.hp, keep.max_hp)
-    except Exception:
-        pass
-    try:
-        if temp_hp is not None:
-            keep.temp_hp = max(0, int(temp_hp))
+        if keep.hp is not None and keep.max_hp is not None and keep.hp > keep.max_hp:
+            keep.hp = keep.max_hp
     except Exception:
         pass
     token_display = (sheet.get("tokenDisplay") if isinstance(sheet.get("tokenDisplay"), dict) else {}) or (book.get("tokenDisplay") if isinstance(book.get("tokenDisplay"), dict) else {})
