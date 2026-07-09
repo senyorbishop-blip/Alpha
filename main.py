@@ -27,7 +27,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.responses import FileResponse
 
 from server.session import get_session
-from server.db import init_db, save_campaign_async, load_campaign, create_creature
+from server.db import init_db, migrate_char_profiles_dedup, save_campaign_async, load_campaign, create_creature
 from server.paths import DATA_DIR, DB_PATH, MAPS_DIR, BACKUPS_DIR, ensure_data_dirs, migrate_legacy_data, create_startup_backup
 from server.connections import manager
 from server.handlers import handle_message
@@ -189,6 +189,9 @@ async def lifespan(app):
     migration = migrate_legacy_data()
     backup_path = create_startup_backup()
     init_db()
+    # One-time storage-layout dedup of persisted char_profiles (idempotent;
+    # runs only after create_startup_backup() above so it is always revertible).
+    migrate_char_profiles_dedup()
     init_map_library_db()
     init_auth_db()
     legacy_user_migration = merge_legacy_users_from_db()
