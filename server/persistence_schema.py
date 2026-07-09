@@ -693,19 +693,22 @@ def _normalize_encumbrance_settings(raw: Any) -> dict:
 
 
 
-def _serialize_chat_participants(participants: dict, persistence_mode: str = "everything") -> dict:
+def _serialize_chat_participants(participants: dict, persistence_mode: str = "everything", friendly_fire: bool = False) -> dict:
     """Convert ChatParticipant dataclasses to plain dicts for JSON serialization.
 
     persistence_mode (DM-configurable per campaign):
       "everything" — full records
       "stats"      — names + lifetime/arena stats only (no campaign inventory)
       "nothing"    — no participant records (the mode itself still persists)
+
+    friendly_fire rides along in the reserved "__config__" entry so the DM's
+    chat-vs-party damage choice survives restarts.
     """
     mode = str(persistence_mode or "everything").strip().lower()
     if mode not in ("everything", "stats", "nothing"):
         mode = "everything"
 
-    out: dict = {"__config__": {"persistence_mode": mode}}
+    out: dict = {"__config__": {"persistence_mode": mode, "friendly_fire": bool(friendly_fire)}}
     if mode == "nothing":
         return out
 
@@ -773,6 +776,7 @@ def extract_persistable_campaign_state(session: Any) -> dict[str, Any]:
         "chat_participants": _serialize_chat_participants(
             getattr(session, "chat_participants", None) or {},
             getattr(session, "chat_persistence_mode", "everything"),
+            bool(getattr(session, "chat_friendly_fire", False)),
         ),
         "chat_rewards_config": _clone(getattr(session, "chat_rewards_config", None) or {}),
         "handouts": _clone(getattr(session, "handouts", None) or []),

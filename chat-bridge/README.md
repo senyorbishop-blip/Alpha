@@ -174,7 +174,7 @@ Bits tiers are configured as an array with `threshold` values — the highest th
 ## 6. Add Custom Chat Commands
 
 Edit `config/commands.json`. Supported actions: `join`, `leave`, `inventory`,
-`target`, `help`, `vote`, `name`, `me`, `stats`, `bag`, `equip`, `shop`,
+`target`, `use`, `help`, `vote`, `name`, `me`, `stats`, `bag`, `equip`, `shop`,
 `buy`, `levelup`, `leaderboard`, `arena`. Map any command prefix to one of
 these actions (multiple prefixes per action = aliases):
 
@@ -251,7 +251,8 @@ docker run --env-file .env chat-bridge
 | `!join` | Register as a chat participant. Idempotent. |
 | `!leave` | Leave the session roster. |
 | `!inventory` / `!inv` | See your campaign items, each with its exact trigger command. |
-| `!target <name>` / `!use <name>` | Use your first available item on a token matching `<name>`. |
+| `!target <name>` | Use your item on a token matching `<name>`. If you hold several items, the bot lists them and asks you to pick with `!use`. |
+| `!use <item> <target>` | Use a specific held item — e.g. `!use fireball goblin`, `!use "healing spark" grognak`. Item names match by case-insensitive prefix against your own inventory; quote multi-word names. Heals and blessings can target party members too. |
 | `!help` / `!commands` / `!command` | Compact command list with usage hints. |
 | `!vote <n>` | Vote on the active DM poll. |
 | `!name <name>` | Set your in-game character name. |
@@ -281,6 +282,7 @@ answer other bots' prefixes.
 In the game client (DM view), two new WebSocket message types are available:
 
 - **`dm_chat_bridge_kill_switch`** `{ "paused": true/false }` — pause or resume all chat bridge interactions instantly.
+- **`dm_chat_friendly_fire`** `{ "enabled": true/false }` — allow chat items to damage party (player-owned) tokens. Default off; heals, blessings, and gifts are never blocked. Also available as a checkbox in the Stream panel.
 - **`dm_grant_chat_participant_item`** `{ "twitch_username": "...", "item_entry": { "name": "...", ... } }` — grant an item directly to a chat participant.
 
 ---

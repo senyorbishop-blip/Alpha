@@ -116,6 +116,7 @@ def _restore_chat_participants(session: Session, data: dict) -> None:
         mode = str(config.get("persistence_mode") or "everything").strip().lower()
         if mode in ("everything", "stats", "nothing"):
             session.chat_persistence_mode = mode
+        session.chat_friendly_fire = bool(config.get("friendly_fire", False))
 
     for key, p in raw_map.items():
         if key == "__config__" or not isinstance(p, dict):

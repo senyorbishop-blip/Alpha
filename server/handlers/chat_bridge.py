@@ -192,16 +192,95 @@ def _power_for_item(session: Session, item: dict) -> tuple:
     return _DEFAULT_ITEM_POWER, defs[_DEFAULT_ITEM_POWER]
 
 
-def _first_usable_item(inventory: list) -> dict | None:
-    """Return the first item that has qty > 0 and either charges or is single-use."""
+def _usable_items(inventory: list) -> list:
+    """All inventory items with qty > 0, in inventory order."""
+    out = []
     for item in inventory:
         if not isinstance(item, dict):
             continue
         qty = int(item.get("qty", 1) or 1)
         if qty <= 0:
             continue
-        return item
-    return None
+        out.append(item)
+    return out
+
+
+def _first_usable_item(inventory: list) -> dict | None:
+    """Return the first item that has qty > 0 and either charges or is single-use."""
+    usable = _usable_items(inventory)
+    return usable[0] if usable else None
+
+
+def _item_display_names(items: list) -> list:
+    """Unique, sanitized display names preserving inventory order."""
+    names = []
+    for item in items:
+        name = _sanitize(str(item.get("name") or "item"), 80)
+        if name not in names:
+            names.append(name)
+    return names
+
+
+def _match_inventory_item(inventory: list, name_query: str):
+    """
+    Case-insensitive prefix/fuzzy match of an item name against the chatter's
+    own usable inventory. Exact name wins, then whole-name prefix, then
+    substring / word-prefix. Returns (item, None) on a unique match,
+    (None, error_dict) otherwise — the error dict carries name lists so the
+    bridge can render its "ambiguous item" / "not owned" chat templates.
+    """
+    usable = _usable_items(inventory)
+    owned = _item_display_names(usable)
+    query = str(name_query or "").strip().lower()
+
+    def name_of(item):
+        return str(item.get("name") or "").strip().lower()
+
+    exact = [i for i in usable if name_of(i) == query]
+    if exact:
+        return exact[0], None
+
+    pool = [i for i in usable if name_of(i).startswith(query)]
+    if not pool:
+        pool = [
+            i for i in usable
+            if query in name_of(i) or any(w.startswith(query) for w in name_of(i).split())
+        ]
+    if not pool:
+        return None, {
+            "error_code": "item_not_owned",
+            "message": f"No item matching '{_sanitize(name_query, 80)}' in your satchel.",
+            "owned_items": owned,
+        }
+    names = _item_display_names(pool)
+    if len(names) > 1:
+        return None, {
+            "error_code": "item_ambiguous",
+            "message": f"Ambiguous item — matches: {', '.join(names[:5])}. Be more specific.",
+            "matching_items": names[:5],
+        }
+    return pool[0], None
+
+
+# Power kinds that hurt or hinder the target. Anything else (heals, blessings,
+# item gifts) is a support power and is always allowed on party tokens.
+_HOSTILE_POWER_KINDS = {
+    "single_damage", "area_damage", "chain_damage",
+    "single_status", "area_status", "knockback",
+}
+
+
+def _is_party_token(token) -> bool:
+    """True when the token belongs to the party: owned by a player user or
+    bound to a player character sheet. token_type alone is not used because
+    hand-placed DM tokens default to type "player"."""
+    if str(getattr(token, "owner_id", "") or "").strip():
+        return True
+    if str(getattr(token, "character_id", "") or "").strip():
+        return True
+    if str(getattr(token, "profile_id", "") or "").strip():
+        return True
+    return False
 
 
 def _consume_item(inventory: list, item: dict) -> None:
@@ -405,6 +484,9 @@ async def handle_chat_participant_target(payload: dict, session: Session, user: 
 
     raw_username = str(payload.get("twitch_username") or "").strip()
     raw_target = str(payload.get("target_name") or "").strip()
+    # Optional: chatters holding several items pick one via !use <item> <target>.
+    # The bridge does no matching of its own — ownership is validated here.
+    raw_item = str(payload.get("item_name") or "").strip()
 
     key = raw_username.lower()
     participant = _resolve_participant(session, key)
@@ -419,8 +501,8 @@ async def handle_chat_participant_target(payload: dict, session: Session, user: 
         })
         return
 
-    item = _first_usable_item(participant.inventory)
-    if item is None:
+    usable = _usable_items(participant.inventory)
+    if not usable:
         await manager.send_to(session.id, user.id, {
             "type": "chat_participant_target_result",
             "payload": _echo_req(payload, {
@@ -429,6 +511,33 @@ async def handle_chat_participant_target(payload: dict, session: Session, user: 
             }),
         })
         return
+
+    if raw_item:
+        item, item_err = _match_inventory_item(participant.inventory, raw_item)
+        if item_err:
+            await manager.send_to(session.id, user.id, {
+                "type": "chat_participant_target_result",
+                "payload": _echo_req(payload, {
+                    "success": False,
+                    "item_name": _sanitize(raw_item, 80),
+                    **item_err,
+                }),
+            })
+            return
+    else:
+        owned = _item_display_names(usable)
+        if len(owned) > 1:
+            # Holding several distinct items — never pick one silently.
+            await manager.send_to(session.id, user.id, {
+                "type": "chat_participant_target_result",
+                "payload": _echo_req(payload, {
+                    "success": False, "error_code": "multiple_items",
+                    "message": f"{participant.display_name} is holding several items — pick one with !use <item> <target>.",
+                    "items": owned[:8],
+                }),
+            })
+            return
+        item = usable[0]
 
     token, err = _fuzzy_match_token(session, raw_target)
     if err:
@@ -449,6 +558,24 @@ async def handle_chat_participant_target(payload: dict, session: Session, user: 
     from server.handlers.common import _token_center, _token_map_context
 
     power_id, power = _power_for_item(session, item)
+
+    # Friendly fire: hostile powers cannot target party tokens unless the DM
+    # turned the toggle on. Support powers (heals, blessings, gifts) always may.
+    if (
+        power.get("kind") in _HOSTILE_POWER_KINDS
+        and _is_party_token(token)
+        and not bool(getattr(session, "chat_friendly_fire", False))
+    ):
+        await manager.send_to(session.id, user.id, {
+            "type": "chat_participant_target_result",
+            "payload": _echo_req(payload, {
+                "success": False, "error_code": "friendly_fire_blocked",
+                "message": f"{target_name} is in the party — the DM has friendly fire turned off. Heals and blessings still work!",
+                "item_name": item_name,
+                "target_name": target_name,
+            }),
+        })
+        return
     cx, cy = _token_center(token)
     target_desc = {
         "token_id": token.id,
@@ -880,12 +1007,15 @@ async def handle_dm_chat_bridge_kill_switch(payload: dict, session: Session, use
     session.chat_bridge_paused = paused
     status = "paused" if paused else "resumed"
 
-    # Optional arena controls piggyback on the same status broadcast so the
-    # bridge learns about them over its existing chat_bridge_status handler.
+    # Optional arena/friendly-fire controls piggyback on the same status
+    # broadcast so the bridge learns about them over its existing
+    # chat_bridge_status handler.
     if "arena_enabled" in payload:
         session.arena_enabled = bool(payload.get("arena_enabled"))
     if "arena_quiet" in payload:
         session.arena_quiet = bool(payload.get("arena_quiet"))
+    if "friendly_fire" in payload:
+        session.chat_friendly_fire = bool(payload.get("friendly_fire"))
 
     log_entry = session.add_log(
         f"Chat bridge {status} by DM.",
@@ -899,12 +1029,45 @@ async def handle_dm_chat_bridge_kill_switch(payload: dict, session: Session, use
             "paused": paused,
             "arena_enabled": bool(getattr(session, "arena_enabled", True)),
             "arena_quiet": bool(getattr(session, "arena_quiet", False)),
+            "friendly_fire": bool(getattr(session, "chat_friendly_fire", False)),
         },
     })
     await manager.broadcast(session.id, {
         "type": "log_entry",
         "payload": {"log": log_entry},
     })
+
+
+async def handle_dm_chat_friendly_fire(payload: dict, session: Session, user: User):
+    """DM toggles whether chat items can damage party tokens (default off).
+
+    Support powers (heals, blessings, item gifts) are never blocked; this
+    only gates hostile powers aimed at player-owned / character-bound tokens.
+    """
+    enabled = bool(payload.get("enabled", False))
+    session.chat_friendly_fire = enabled
+
+    log_entry = session.add_log(
+        f"Chat friendly fire {'enabled' if enabled else 'disabled'} by DM.",
+        msg_type="system",
+        user_name=user.name,
+    )
+
+    await manager.broadcast(session.id, {
+        "type": "chat_bridge_status",
+        "payload": {
+            "paused": bool(getattr(session, "chat_bridge_paused", False)),
+            "arena_enabled": bool(getattr(session, "arena_enabled", True)),
+            "arena_quiet": bool(getattr(session, "arena_quiet", False)),
+            "friendly_fire": enabled,
+        },
+    })
+    await manager.broadcast(session.id, {"type": "log_entry", "payload": {"log": log_entry}})
+    await manager.send_to(session.id, user.id, {
+        "type": "dm_chat_friendly_fire_result",
+        "payload": {"success": True, "friendly_fire": enabled},
+    })
+    await save_campaign_async(session)
 
 
 # ---------------------------------------------------------------------------

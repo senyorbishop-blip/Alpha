@@ -14,6 +14,10 @@ const DEFAULT_RESPONSES = {
   target_invalid:     '{user}, invalid target name.',
   target_miss:        '{user}: {message}',
   target_cooldown:    '{user}, catch your breath — try again in {seconds}s.',
+  target_multiple_items: "@{user} you're holding: {items} — use {useCmd} <item> <target>",
+  use_no_args:        '{user}, usage: {useCmd} <item> <target> — e.g. {useCmd} fireball goblin, or {useCmd} "healing spark" grognak',
+  use_ambiguous:      '@{user} which item? Matching: {items} — be more specific (quotes work: {useCmd} "healing spark" <target>).',
+  use_not_owned:      "@{user} you don't have '{item}'. You have: {items}",
   inventory_empty:    '{user}, your satchel is empty. Keep watching — loot may come!',
   inventory_list:     '{user}, your items: {items}',
   inventory_not_joined: "{user}, you're not in the tavern yet — type !join first.",
@@ -45,6 +49,7 @@ const ACTION_USAGE = [
   ['leave',       ''],
   ['inventory',   ''],
   ['target',      '<name>'],
+  ['use',         '<item> <target>'],
   ['stats',       ''],
   ['bag',         ''],
   ['equip',       '<item>'],
@@ -136,6 +141,7 @@ class CommandParser {
       case 'leave':     await this._handleLeave(channel, userId, username, displayName); break;
       case 'inventory': await this._handleInventory(channel, userId, username, displayName); break;
       case 'target':    await this._handleTarget(channel, userId, username, displayName, args); break;
+      case 'use':       await this._handleUse(channel, userId, username, displayName, args); break;
       case 'help':      this._handleHelp(channel, username); break;
       case 'vote':      await this._handleVote(channel, username, displayName, args); break;
       case 'name':      await this._handleName(channel, userId, username, displayName, args); break;
@@ -228,11 +234,20 @@ class CommandParser {
       this._twitch.reply(channel, username, this._t('inventory_empty', { user: displayName }));
     } else {
       const targetCmd = this._targetCommand();
+      const useCmd = this._commandFor('use');
+      // With 2+ items !target would ask which one — hint the !use form instead.
+      const multi = items.length >= 2 && !!useCmd;
       const list = items.map(i => {
         const count = i.charges_max > 0
           ? `${i.charges_current}/${i.charges_max}`
           : `x${i.qty}`;
-        const hint = targetCmd ? ` (use: ${targetCmd} <name>)` : '';
+        let hint = '';
+        if (multi) {
+          const ref = /\s/.test(i.name) ? `"${i.name.toLowerCase()}"` : i.name.toLowerCase();
+          hint = ` (use: ${useCmd} ${ref} <target>)`;
+        } else if (targetCmd) {
+          hint = ` (use: ${targetCmd} <name>)`;
+        }
         return `${i.name} ${count}${hint}`;
       }).join(', ');
       this._twitch.reply(channel, username, this._t('inventory_list', { user: displayName, items: list }));
@@ -257,12 +272,53 @@ class CommandParser {
       return;
     }
 
-    const result = await this._game.send('chat_participant_target', {
+    await this._sendTargetRequest(channel, userId, username, displayName, targetName, '');
+  }
+
+  /**
+   * !use <item> <target> — pick which held item to use. The item may be
+   * quoted ("healing spark") to span multiple words; unquoted, the first word
+   * is the item and the rest is the target. The server matches the item
+   * against the chatter's inventory (prefix/fuzzy) and validates ownership.
+   */
+  async _handleUse(channel, userId, username, displayName, args) {
+    // Shares the 'target' cooldown bucket — same game action.
+    if (!this._rate.check(username, 'target')) {
+      const rem = this._rate.remaining(username, 'target');
+      this._twitch.reply(channel, username, this._t('target_cooldown', { user: displayName, seconds: rem }));
+      return;
+    }
+
+    const raw = args.join(' ');
+    const m = raw.match(/^\s*(?:"([^"]+)"|'([^']+)'|(\S+))\s+(\S.*)$/);
+    if (!m) {
+      this._twitch.reply(channel, username, this._t('use_no_args', {
+        user: displayName, useCmd: this._useCommand(),
+      }));
+      return;
+    }
+
+    const itemName = sanitizeArg(m[1] ?? m[2] ?? m[3], 80);
+    const targetName = sanitizeArg(m[4], 64);
+    if (!itemName || !targetName) {
+      this._twitch.reply(channel, username, this._t('target_invalid', { user: displayName }));
+      return;
+    }
+
+    await this._sendTargetRequest(channel, userId, username, displayName, targetName, itemName);
+  }
+
+  /** Send chat_participant_target (optionally with an item choice) and render the reply. */
+  async _sendTargetRequest(channel, userId, username, displayName, targetName, itemName) {
+    const payload = {
       twitch_username: username,
       twitch_user_id: userId,
       display_name: displayName,
       target_name: targetName,
-    });
+    };
+    if (itemName) payload.item_name = itemName;
+
+    const result = await this._game.send('chat_participant_target', payload);
 
     if (result?.success) {
       this._twitch.say(channel, this._t('target_hit', {
@@ -274,6 +330,24 @@ class CommandParser {
       this._twitch.reply(channel, username, this._t('target_no_item', { user: displayName }));
     } else if (result?.error_code === 'not_joined') {
       this._twitch.reply(channel, username, this._t('target_not_joined', { user: displayName }));
+    } else if (result?.error_code === 'multiple_items') {
+      this._twitch.reply(channel, username, this._t('target_multiple_items', {
+        user: displayName,
+        items: (result.items ?? []).join(', '),
+        useCmd: this._useCommand(),
+      }));
+    } else if (result?.error_code === 'item_ambiguous') {
+      this._twitch.reply(channel, username, this._t('use_ambiguous', {
+        user: displayName,
+        items: (result.matching_items ?? []).join(', '),
+        useCmd: this._useCommand(),
+      }));
+    } else if (result?.error_code === 'item_not_owned') {
+      this._twitch.reply(channel, username, this._t('use_not_owned', {
+        user: displayName,
+        item: itemName,
+        items: (result.owned_items ?? []).join(', '),
+      }));
     } else {
       this._twitch.reply(channel, username, this._t('target_miss', {
         user: displayName,
@@ -432,12 +506,22 @@ class CommandParser {
   // Helpers
   // ---------------------------------------------------------------------------
 
-  /** Return the first command key that maps to the 'target' action, or null. */
-  _targetCommand() {
-    for (const [cmd, action] of Object.entries(this._commandMap)) {
-      if (action === 'target') return cmd;
+  /** Return the first command key that maps to the given action, or null. */
+  _commandFor(action) {
+    for (const [cmd, mapped] of Object.entries(this._commandMap)) {
+      if (mapped === action) return cmd;
     }
     return null;
+  }
+
+  /** Return the first command key that maps to the 'target' action, or null. */
+  _targetCommand() {
+    return this._commandFor('target');
+  }
+
+  /** Command for the 'use' action, for reply templates (falls back to !use). */
+  _useCommand() {
+    return this._commandFor('use') || '!use';
   }
 }
 

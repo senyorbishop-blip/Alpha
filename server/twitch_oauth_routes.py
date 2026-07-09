@@ -308,6 +308,7 @@ async def twitch_status(session_id: str, request: Request):
     row = _get_twitch_row(session_id)
     session = get_session(session_id)
     persistence_mode = str(getattr(session, "chat_persistence_mode", "everything") or "everything")
+    friendly_fire = bool(getattr(session, "chat_friendly_fire", False))
 
     # Whether the chat bridge service currently holds a live WebSocket to this
     # session — tells the DM instantly whether !join etc. will work.
@@ -321,6 +322,7 @@ async def twitch_status(session_id: str, request: Request):
         return JSONResponse(content={
             "connected": False, "channel": None, "enabled": True,
             "persistence_mode": persistence_mode,
+            "friendly_fire": friendly_fire,
             "bridge_connected": bridge_connected,
             "bridge": bridge,
         })
@@ -337,6 +339,7 @@ async def twitch_status(session_id: str, request: Request):
         "channel":   row["twitch_channel"],
         "enabled":   enabled,
         "persistence_mode": persistence_mode,
+        "friendly_fire": friendly_fire,
         "bridge_connected": bridge_connected,
         "bridge": bridge,
     })
@@ -401,6 +404,7 @@ async def twitch_toggle(session_id: str, request: Request):
                     "paused": not enabled,
                     "arena_enabled": bool(getattr(session, "arena_enabled", True)),
                     "arena_quiet": bool(getattr(session, "arena_quiet", False)),
+                    "friendly_fire": bool(getattr(session, "chat_friendly_fire", False)),
                 },
             })
         except Exception:

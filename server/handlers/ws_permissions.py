@@ -94,6 +94,7 @@ DM_ADMIN_MESSAGE_TYPES = frozenset({
     "viewer_presence_toggle",
     # Chat bridge admin (DM only)
     "dm_chat_bridge_kill_switch",
+    "dm_chat_friendly_fire",
     "dm_grant_chat_participant_item",
     "dm_chat_participants_get",
     "dm_chat_participant_update",

@@ -26,7 +26,7 @@ function makeTwitchClient() {
 }
 
 function makeParser(gameResponses = {}, cooldownConfig = {}) {
-  const commandMap = { '!join': 'join', '!leave': 'leave', '!inventory': 'inventory', '!target': 'target' };
+  const commandMap = { '!join': 'join', '!leave': 'leave', '!inventory': 'inventory', '!target': 'target', '!use': 'use' };
   const rateLimiter = new RateLimiter({ default_seconds: 0, ...cooldownConfig });
   const gameClient = makeGameClient(gameResponses);
   const twitchClient = makeTwitchClient();
@@ -173,7 +173,7 @@ describe('CommandParser — rate limiting', () => {
 // config/commands.json.
 const FULL_COMMAND_MAP = {
   '!join': 'join', '!leave': 'leave', '!inventory': 'inventory', '!inv': 'inventory',
-  '!bag': 'bag', '!target': 'target', '!use': 'target',
+  '!bag': 'bag', '!target': 'target', '!use': 'use',
   '!help': 'help', '!commands': 'help', '!command': 'help',
   '!vote': 'vote', '!name': 'name', '!me': 'me', '!character': 'me',
   '!stats': 'stats', '!sheet': 'stats', '!equip': 'equip', '!shop': 'shop',
@@ -240,6 +240,7 @@ describe('CommandParser — !help usage hints', () => {
     const msg = twitchClient.replied[0].msg;
     // usage hints
     expect(msg).toContain('!target <name>');
+    expect(msg).toContain('!use <item> <target>');
     expect(msg).toContain('!equip <item>');
     expect(msg).toContain('!buy <item>');
     expect(msg).toContain('!vote <n>');
@@ -318,7 +319,18 @@ describe('CommandParser — !target usability (no item / not joined)', () => {
 });
 
 describe('CommandParser — !inventory trigger hints', () => {
-  test('lists each item with its exact trigger command', async () => {
+  test('single item keeps the simple !target hint', async () => {
+    const { parser, twitchClient } = makeParser({
+      chat_participant_inventory: {
+        found: true,
+        items: [{ name: 'Fireball', qty: 1, charges_current: 0, charges_max: 0 }],
+      },
+    });
+    await parser.handle(CH, TAGS('ivy'), '!inventory');
+    expect(twitchClient.replied[0].msg).toContain('Fireball x1 (use: !target <name>)');
+  });
+
+  test('2+ items switch hints to the !use form, quoting multi-word names', async () => {
     const { parser, twitchClient } = makeParser({
       chat_participant_inventory: {
         found: true,
@@ -331,9 +343,117 @@ describe('CommandParser — !inventory trigger hints', () => {
     });
     await parser.handle(CH, TAGS('ivy'), '!inventory');
     const msg = twitchClient.replied[0].msg;
-    expect(msg).toContain('Fireball x1 (use: !target <name>)');
-    expect(msg).toContain('Healing Spark x2 (use: !target <name>)');
-    expect(msg).toContain('Wand of Zaps 2/3 (use: !target <name>)');
+    expect(msg).toContain('Fireball x1 (use: !use fireball <target>)');
+    expect(msg).toContain('Healing Spark x2 (use: !use "healing spark" <target>)');
+    expect(msg).toContain('Wand of Zaps 2/3 (use: !use "wand of zaps" <target>)');
+    expect(msg).not.toContain('!target <name>');
+  });
+});
+
+describe('CommandParser — !target with one vs many items', () => {
+  test('one-item !target sends no item_name (server picks the single item)', async () => {
+    const { parser, gameClient } = makeParser({
+      chat_participant_target: { success: true, item_name: 'Fireball', target_name: 'Goblin' },
+    });
+    await parser.handle(CH, TAGS('solo'), '!target Goblin');
+    expect(gameClient.calls[0].type).toBe('chat_participant_target');
+    expect(gameClient.calls[0].payload.item_name).toBeUndefined();
+  });
+
+  test('multi-item !target asks the chatter to pick with !use', async () => {
+    const { parser, twitchClient } = makeParser({
+      chat_participant_target: {
+        success: false,
+        error_code: 'multiple_items',
+        items: ['Fireball', 'Healing Spark'],
+      },
+    });
+    await parser.handle(CH, TAGS('hoarder', 'Hoarder'), '!target Goblin');
+    expect(twitchClient.replied).toHaveLength(1);
+    const msg = twitchClient.replied[0].msg;
+    expect(msg).toContain("you're holding: Fireball, Healing Spark");
+    expect(msg).toContain('!use <item> <target>');
+  });
+});
+
+describe('CommandParser — !use <item> <target>', () => {
+  test('sends item_name and target_name for an exact item', async () => {
+    const { parser, gameClient, twitchClient } = makeParser({
+      chat_participant_target: { success: true, item_name: 'Fireball', target_name: 'Goblin' },
+    });
+    await parser.handle(CH, TAGS('kate'), '!use fireball goblin');
+    const call = gameClient.calls[0];
+    expect(call.type).toBe('chat_participant_target');
+    expect(call.payload.item_name).toBe('fireball');
+    expect(call.payload.target_name).toBe('goblin');
+    expect(twitchClient.said.some(s => s.msg.includes('Fireball') && s.msg.includes('Goblin'))).toBe(true);
+  });
+
+  test('quoted multi-word item name spans spaces', async () => {
+    const { parser, gameClient } = makeParser({
+      chat_participant_target: { success: true, item_name: 'Healing Spark', target_name: 'Grognak' },
+    });
+    await parser.handle(CH, TAGS('lena'), '!use "healing spark" grognak');
+    const call = gameClient.calls[0];
+    expect(call.payload.item_name).toBe('healing spark');
+    expect(call.payload.target_name).toBe('grognak');
+  });
+
+  test('unquoted first word is the item, rest is the target', async () => {
+    const { parser, gameClient } = makeParser({
+      chat_participant_target: { success: true, item_name: 'Fireball', target_name: 'Goblin King' },
+    });
+    await parser.handle(CH, TAGS('mia'), '!use fireball goblin king');
+    const call = gameClient.calls[0];
+    expect(call.payload.item_name).toBe('fireball');
+    expect(call.payload.target_name).toBe('goblin king');
+  });
+
+  test('ambiguous item match lists the matching items', async () => {
+    const { parser, twitchClient } = makeParser({
+      chat_participant_target: {
+        success: false,
+        error_code: 'item_ambiguous',
+        matching_items: ['Wand of Zaps', 'Wand of Fire'],
+      },
+    });
+    await parser.handle(CH, TAGS('nina'), '!use wand goblin');
+    expect(twitchClient.replied).toHaveLength(1);
+    expect(twitchClient.replied[0].msg).toContain('Wand of Zaps, Wand of Fire');
+  });
+
+  test('unowned item lists what the chatter DOES have', async () => {
+    const { parser, twitchClient } = makeParser({
+      chat_participant_target: {
+        success: false,
+        error_code: 'item_not_owned',
+        owned_items: ['Pebble', 'Healing Spark'],
+      },
+    });
+    await parser.handle(CH, TAGS('omar'), '!use excalibur goblin');
+    expect(twitchClient.replied).toHaveLength(1);
+    const msg = twitchClient.replied[0].msg;
+    expect(msg).toContain("don't have 'excalibur'");
+    expect(msg).toContain('Pebble, Healing Spark');
+  });
+
+  test('!use with no target replies with usage, no game call', async () => {
+    const { parser, gameClient, twitchClient } = makeParser();
+    await parser.handle(CH, TAGS('pam'), '!use fireball');
+    expect(gameClient.calls).toHaveLength(0);
+    expect(twitchClient.replied[0].msg).toContain('!use <item> <target>');
+  });
+
+  test('friendly-fire block is relayed to the chatter', async () => {
+    const { parser, twitchClient } = makeParser({
+      chat_participant_target: {
+        success: false,
+        error_code: 'friendly_fire_blocked',
+        message: 'Elowen is in the party — the DM has friendly fire turned off. Heals and blessings still work!',
+      },
+    });
+    await parser.handle(CH, TAGS('quin'), '!use fireball elowen');
+    expect(twitchClient.replied[0].msg).toContain('friendly fire turned off');
   });
 });
 

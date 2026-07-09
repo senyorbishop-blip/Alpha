@@ -406,8 +406,8 @@
     // Chat Party: live roster of joined chatters + quick actions
     _buildChatPartySection(body);
 
-    // DM tools: persistence mode + chat character roster
-    _buildDmToolsSection(body, data.persistence_mode);
+    // DM tools: persistence mode + friendly fire + chat character roster
+    _buildDmToolsSection(body, data.persistence_mode, data.friendly_fire);
   }
 
   function _buildOverlayRow(label, url, sessionId, type, dims) {
@@ -804,7 +804,7 @@
     }, 350);
   }
 
-  function _buildDmToolsSection(body, persistenceMode) {
+  function _buildDmToolsSection(body, persistenceMode, friendlyFire) {
     var section = document.createElement('div');
     section.style.cssText = 'margin-top:0.75rem;border-top:1px solid rgba(255,255,255,0.1);padding-top:0.65rem;';
     section.innerHTML =
@@ -818,6 +818,11 @@
           '<option value="nothing">Nothing</option>' +
         '</select>' +
       '</label>' +
+      '<label style="display:flex;align-items:center;gap:0.4rem;font-size:0.66rem;color:var(--parchment-dim);margin-bottom:0.5rem;cursor:pointer;" ' +
+             'title="When off (default), chat items cannot damage party tokens. Heals and blessings always work.">' +
+        '<input type="checkbox" class="twitch-friendly-fire" style="accent-color:#c9a84c;" />' +
+        'Friendly fire — chat items can damage the party' +
+      '</label>' +
       '<button type="button" class="twitch-roster-refresh" style="padding:0.24rem 0.6rem;background:rgba(201,168,76,0.14);color:#c9a84c;' +
               'border:1px solid rgba(201,168,76,0.35);border-radius:5px;font-size:0.66rem;cursor:pointer;">View chat characters</button>' +
       '<div class="twitch-roster-wrap" style="margin-top:0.45rem;font-size:0.64rem;color:var(--parchment-dim);"></div>';
@@ -827,6 +832,12 @@
     modeSel.value = persistenceMode || 'everything';
     modeSel.addEventListener('change', function () {
       _sendWS({ type: 'dm_chat_persistence_mode', payload: { mode: modeSel.value } });
+    });
+
+    var ffToggle = section.querySelector('.twitch-friendly-fire');
+    ffToggle.checked = !!friendlyFire;
+    ffToggle.addEventListener('change', function () {
+      _sendWS({ type: 'dm_chat_friendly_fire', payload: { enabled: ffToggle.checked } });
     });
 
     var rosterWrap = section.querySelector('.twitch-roster-wrap');

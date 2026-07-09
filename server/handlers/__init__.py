@@ -277,6 +277,7 @@ from server.handlers.chat_bridge import (
     handle_chat_participant_name_set,
     handle_chat_participant_me,
     handle_dm_chat_bridge_kill_switch,
+    handle_dm_chat_friendly_fire,
     handle_dm_grant_chat_participant_item,
     handle_chat_participant_arena_stats_update,
     handle_arena_display_event,
@@ -530,6 +531,7 @@ async def handle_message(raw: dict, session: Session, user: User):
         "chat_participant_me":        handle_chat_participant_me,
         # ── Chat Bridge admin (dm role only) ───────────────────────────────
         "dm_chat_bridge_kill_switch":        handle_dm_chat_bridge_kill_switch,
+        "dm_chat_friendly_fire":             handle_dm_chat_friendly_fire,
         "dm_grant_chat_participant_item":    handle_dm_grant_chat_participant_item,
         "dm_chat_participants_get":          handle_dm_chat_participants_get,
         "dm_chat_participant_update":        handle_dm_chat_participant_update,
