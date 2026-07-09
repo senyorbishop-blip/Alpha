@@ -1109,4 +1109,8 @@ async def api_srd_item_count():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=PORT, reload=False, access_log=False)
+    # ws_per_message_deflate: explicit so WebSocket compression can never be
+    # lost to a changed uvicorn default. The repetitive JSON in state/token
+    # sync compresses ~5-10x on the wire (see [ws] outbound_send
+    # deflate_estimate_bytes in the payload logs).
+    uvicorn.run(app, host="0.0.0.0", port=PORT, reload=False, access_log=False, ws_per_message_deflate=True)

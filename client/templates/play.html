@@ -27347,6 +27347,18 @@ function handleLegacyMessage(msg) {
       break;
     }
 
+    case 'party_loot_log_response': {
+      // Older loot entries fetched on demand (sync ships only the newest 50).
+      const older = Array.isArray(p.entries) ? p.entries.filter(x => x && typeof x === 'object') : [];
+      if (older.length) {
+        const seen = new Set((partyLootLog || []).map(e => String(e?.id || '')));
+        const merged = older.filter(e => !seen.has(String(e?.id || ''))).concat(partyLootLog || []);
+        partyLootLog = merged.slice(-120);
+        renderInventoryPanel();
+      }
+      break;
+    }
+
     case 'char_profile_response': {
       // On-demand full profile body (sync only carries stubs).
       const rid = String(p.id || (p.profile && p.profile.id) || '').trim();

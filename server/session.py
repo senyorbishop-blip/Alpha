@@ -51,6 +51,10 @@ def normalize_map_context_from_payload(payload: dict | None, *, fallback: str = 
             return normalize_map_context(data.get(key), fallback=fallback)
     return normalize_map_context(fallback)
 
+# Newest party-loot entries shipped in state/inventory sync payloads. Older
+# entries (storage keeps 120) are available via party_loot_log_fetch.
+PARTY_LOOT_LOG_SYNC_LIMIT = 50
+
 def normalize_fog_maps(fog_maps: dict | None) -> dict:
     normalized = {}
     for key, raw in dict(fog_maps or {}).items():
@@ -1188,7 +1192,7 @@ class Session:
             # fetches any full body on demand via char_profile_fetch.
             d["player_inventories"] = build_player_inventory_payload_for_dm(self)
             d["party_stash"] = get_party_stash_inventory(self)
-            d["party_loot_log"] = list(self.party_loot_log or [])[-120:]
+            d["party_loot_log"] = list(self.party_loot_log or [])[-PARTY_LOOT_LOG_SYNC_LIMIT:]
             d["player_gold"] = dict(self.player_gold or {})
             d["editor_layers"] = dict(self.editor_layers or {})
             d["editor_walls"] = dict(self.editor_walls or {})
@@ -1263,7 +1267,7 @@ class Session:
                 d["party_stash"] = get_party_stash_inventory(self)
                 d["player_gold"] = get_player_gold_for_user(self, user_id)
                 d["active_char_profile_id"] = str((self.active_char_profiles or {}).get(user_id) or "")
-                d["party_loot_log"] = list(self.party_loot_log or [])[-120:]
+                d["party_loot_log"] = list(self.party_loot_log or [])[-PARTY_LOOT_LOG_SYNC_LIMIT:]
                 d["saved_discoveries"] = self._saved_discovery_cards_for_user(user_id)
                 try:
                     d["quick_actions"] = build_quick_actions_sync_payload(self, user_id)

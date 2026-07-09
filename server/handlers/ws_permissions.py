@@ -251,6 +251,7 @@ PLAYER_KNOWN_GAMEPLAY_MESSAGE_TYPES = frozenset({
     "sell_item",
     "haggle_sell_item",
     "treasury_get",
+    "party_loot_log_fetch",
     "bag_add_item",
     "bag_remove_item",
     "corpse_search",
