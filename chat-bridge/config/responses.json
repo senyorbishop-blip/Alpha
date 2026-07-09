@@ -33,5 +33,7 @@
   "name_cooldown": "@{user} Wait {seconds}s before changing your name again.",
   "me_summary": "@{user} — {charName} | Items: {items} | Sessions: {sessions} | Damage dealt: {damage} | Arena: {wins}W/{losses}L",
   "me_not_joined": "@{user} Type !join first to enter the game.",
-  "me_cooldown": "@{user} Wait {seconds}s."
+  "me_cooldown": "@{user} Wait {seconds}s.",
+  "unknown_command": "@{user} I don't know that one — try !help for the command list.",
+  "progression_cooldown": "@{user} Wait {seconds}s."
 }

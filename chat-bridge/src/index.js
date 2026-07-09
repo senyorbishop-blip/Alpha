@@ -10,10 +10,11 @@ const { TwitchClient }  = require('./twitchClient');
 const { GameClient }    = require('./gameClient');
 const { CommandParser } = require('./commandParser');
 const { RateLimiter }   = require('./rateLimiter');
-const { LootRoller }    = require('./lootRoller');
+const { LootRoller, rollRewardEntry, pickRewardTier } = require('./lootRoller');
 const { EventSubClient } = require('./eventSubClient');
 const { sanitize, validateUsername } = require('./sanitizer');
 const { Arena }         = require('./arena');
+const { ArenaProgression } = require('./arenaProgression');
 const { MockTwitchClient, MockEventSubClient, startMockRepl } = require('./mockChat');
 
 // ---------------------------------------------------------------------------
@@ -38,7 +39,15 @@ function loadJson(relPath) {
   }
 }
 
-const commandMap = loadJson('config/commands.json')  ?? { '!join': 'join', '!leave': 'leave', '!inventory': 'inventory', '!target': 'target', '!help': 'help' };
+const commandMap = loadJson('config/commands.json')  ?? {
+  '!join': 'join', '!leave': 'leave', '!inventory': 'inventory', '!inv': 'inventory',
+  '!bag': 'bag', '!target': 'target', '!use': 'target',
+  '!help': 'help', '!commands': 'help', '!command': 'help',
+  '!vote': 'vote', '!name': 'name', '!me': 'me', '!character': 'me',
+  '!stats': 'stats', '!sheet': 'stats', '!equip': 'equip', '!shop': 'shop',
+  '!buy': 'buy', '!levelup': 'levelup', '!leaderboard': 'leaderboard',
+  '!duel': 'arena', '!accept': 'arena', '!decline': 'arena',
+};
 const lootTables = loadJson('config/loot-tables.json') ?? {};
 const cooldowns  = loadJson('config/cooldowns.json')   ?? {};
 const responses  = loadJson('config/responses.json')   ?? {};
@@ -118,14 +127,22 @@ const gameClient = new GameClient({
 const rateLimiter = new RateLimiter({
   ...cooldowns,
   commands: {
-    join:      cooldowns.join_seconds      ?? 10,
-    leave:     cooldowns.leave_seconds     ?? 5,
-    inventory: cooldowns.inventory_seconds ?? 10,
-    target:    cooldowns.target_seconds    ?? 30,
-    help:      cooldowns.help_seconds      ?? 5,
-    vote:      cooldowns.vote_seconds      ?? 2,
-    name:      cooldowns.name_seconds      ?? 10,
-    me:        cooldowns.me_seconds        ?? 10,
+    join:        cooldowns.join_seconds        ?? 10,
+    leave:       cooldowns.leave_seconds       ?? 5,
+    inventory:   cooldowns.inventory_seconds   ?? 10,
+    target:      cooldowns.target_seconds      ?? 30,
+    help:        cooldowns.help_seconds        ?? 5,
+    vote:        cooldowns.vote_seconds        ?? 2,
+    name:        cooldowns.name_seconds        ?? 10,
+    me:          cooldowns.me_seconds          ?? 10,
+    stats:       cooldowns.stats_seconds       ?? 10,
+    bag:         cooldowns.bag_seconds         ?? 10,
+    equip:       cooldowns.equip_seconds       ?? 5,
+    shop:        cooldowns.shop_seconds        ?? 15,
+    buy:         cooldowns.buy_seconds         ?? 5,
+    levelup:     cooldowns.levelup_seconds     ?? 10,
+    leaderboard: cooldowns.leaderboard_seconds ?? 30,
+    unknown_cmd: cooldowns.unknown_cmd_seconds ?? 60,
     ...(cooldowns.commands ?? {}),
   },
   default_seconds:       cooldowns.default_seconds       ?? 5,
@@ -134,6 +151,56 @@ const rateLimiter = new RateLimiter({
 });
 
 const lootRoller = new LootRoller(lootTables);
+
+// ---------------------------------------------------------------------------
+// Server-managed reward tables (DM-configurable in the Stream panel)
+//
+// The server persists a per-campaign rewards config mapping Twitch events to
+// weighted tables of viewer powers:
+//   { sub: [{power_id, name, weight}, …],
+//     gift_tiers: [{min_count, table: […]}, …],
+//     bits_tiers: [{threshold, table: […]}, …] }
+// Fetched at startup and refreshed whenever the DM saves changes
+// (chat_rewards_updated broadcast). Falls back to the local
+// config/loot-tables.json item tables when the server has no config.
+// ---------------------------------------------------------------------------
+let rewardConfig = null;
+
+function applyRewardConfig(config) {
+  if (!config || typeof config !== 'object') return;
+  rewardConfig = {
+    sub: Array.isArray(config.sub) ? config.sub : [],
+    gift_tiers: Array.isArray(config.gift_tiers) ? config.gift_tiers : [],
+    bits_tiers: Array.isArray(config.bits_tiers) ? config.bits_tiers : [],
+  };
+  logger.info('[rewards] Applied server reward config '
+    + `(sub: ${rewardConfig.sub.length} powers, gift tiers: ${rewardConfig.gift_tiers.length}, bits tiers: ${rewardConfig.bits_tiers.length})`);
+}
+
+async function refreshRewardConfig() {
+  try {
+    const result = await gameClient.send('chat_bridge_rewards_get', {});
+    if (result?.config) applyRewardConfig(result.config);
+    else logger.info('[rewards] No server reward config — using local loot-tables.json');
+  } catch (err) {
+    logger.warn('[rewards] Could not fetch reward config:', err.message);
+  }
+}
+
+/** Grant a rolled viewer-power reward as a chat-participant item. */
+async function grantPowerReward(username, displayName, entry, trigger, announcement, channel) {
+  const itemName = sanitize(String(entry.name || entry.power_id), 80);
+  logger.info(`[rewards] ${trigger} → ${username} receives ${itemName} (${entry.power_id})`);
+  await gameClient.send('chat_bridge_loot_grant', {
+    twitch_username: username,
+    display_name: displayName,
+    item_entry: { ...buildItemEntry(itemName), power_id: String(entry.power_id) },
+    trigger,
+  });
+  if (announcement && channel && twitchClient) {
+    twitchClient.say(channel, announcement(displayName, itemName));
+  }
+}
 
 // ---------------------------------------------------------------------------
 // EventSub loot event handlers
@@ -179,6 +246,7 @@ let twitchClient = null;
 let commandParser = null;
 let eventSubClient = null;
 let arena = null;
+let progression = null;
 
 async function main() {
   logger.info('[ChatBridge] Starting Twitch Chat Bridge…');
@@ -239,8 +307,11 @@ async function main() {
 
   const channel = `#${twitchChannel.replace(/^#/, '')}`;
 
+  progression = new ArenaProgression({ gameClient, twitchClient, logger });
+
   arena = new Arena({
     twitchClient,
+    progression,
     config: {
       duel_cooldown_seconds: cooldowns.duel_cooldown_seconds ?? 120,
       interactiveMode: false,
@@ -268,9 +339,19 @@ async function main() {
     arenaHandler: (ch, username, displayName, action, args) => {
       arena.handleCommand(ch, username, displayName, action, args);
     },
+    progressionHandler: (ch, username, displayName, action, args) =>
+      progression.handleCommand(ch, username, displayName, action, args),
   });
 
   twitchClient.onMessage((ch, tags, message) => commandParser.handle(ch, tags, message));
+
+  // DM-configured reward tables: fetch now, refresh whenever the DM saves
+  // changes in the Stream panel.
+  await refreshRewardConfig();
+  gameClient.on('chat_rewards_updated', (payload) => {
+    if (payload?.config) applyRewardConfig(payload.config);
+    else refreshRewardConfig();
+  });
 
   // Listen for poll events and announce them in chat
   gameClient.on('poll_created', (payload) => {
@@ -325,16 +406,49 @@ async function main() {
       const valid = validateUsername(username);
       if (!valid) return;
       const trigger   = gifted ? 'gifted_sub' : months > 1 ? 'resub' : 'sub';
-      const tableName = lootTables.sub ? 'sub' : 'default';
       const announce  = gifted
         ? (dn, item) => `${gifterDisplay ?? '?'} gifted a sub to ${dn}! They receive ${item}!`
         : (dn, item) => `${dn} subscribed${months > 1 ? ` (${months} months!)` : ''}! They receive ${item}!`;
+
+      // Server-managed reward table first; local loot-tables.json fallback.
+      const entry = rewardConfig ? rollRewardEntry(rewardConfig.sub) : null;
+      if (entry) {
+        await grantPowerReward(valid, displayName, entry, trigger, announce, channel);
+        return;
+      }
+      const tableName = lootTables.sub ? 'sub' : 'default';
       await grantLoot(valid, displayName, tableName, trigger, announce, channel);
+    });
+
+    // Gift-sub batches: the GIFTER earns a reward from the tier matching how
+    // many subs they gave (1 / 5 / 10+ by default). Each recipient still gets
+    // a normal sub reward via the 'sub' event above.
+    eventSubClient.on('giftsub', async ({ username, displayName, total }) => {
+      const valid = validateUsername(username);
+      if (!valid || !rewardConfig) return;
+      const count = Math.max(1, Number(total) || 1);
+      const tier = pickRewardTier(rewardConfig.gift_tiers, 'min_count', count);
+      const entry = tier ? rollRewardEntry(tier.table) : null;
+      if (!entry) return;
+      const announce = (dn, item) => `${dn} gifted ${count} sub${count > 1 ? 's' : ''} and receives ${item}!`;
+      await grantPowerReward(valid, displayName, entry, `gift_x${count}`, announce, channel);
     });
 
     eventSubClient.on('bits', async ({ username, displayName, amount }) => {
       const valid = validateUsername(username);
       if (!valid) return;
+
+      // Server-managed bits tiers first; local loot-tables.json fallback.
+      if (rewardConfig) {
+        const tier = pickRewardTier(rewardConfig.bits_tiers, 'threshold', amount);
+        const entry = tier ? rollRewardEntry(tier.table) : null;
+        if (entry) {
+          const announce = (dn, item) => `${dn} cheered ${amount} bits and received ${item}!`;
+          await grantPowerReward(valid, displayName, entry, `bits_${amount}`, announce, channel);
+          return;
+        }
+      }
+
       const bitsConfig = lootTables.bits;
       if (!Array.isArray(bitsConfig)) return;
       const result = lootRoller.rollBits(amount, bitsConfig);

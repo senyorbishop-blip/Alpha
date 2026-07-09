@@ -183,6 +183,13 @@ function startMockRepl({ twitchClient, eventSubClient, logger, onQuit }) {
         const gifter = args[0];
         const count = Math.max(1, parseInt(args[1], 10) || 1);
         if (!gifter) { console.log('usage: /giftsub <gifter> <count>'); break; }
+        // Mirrors real EventSub: one 'giftsub' batch event for the gifter,
+        // plus a gifted 'sub' event per recipient.
+        eventSubClient.emit('giftsub', {
+          username: gifter.toLowerCase(),
+          displayName: gifter,
+          total: count,
+        });
         for (let i = 0; i < count; i++) {
           const recipient = FAKE_USERS[i % FAKE_USERS.length];
           fireSub(recipient, { gifted: true, gifterDisplay: gifter });

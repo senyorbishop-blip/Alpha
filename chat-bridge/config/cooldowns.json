@@ -8,6 +8,14 @@
   "vote_seconds":     2,
   "name_seconds":     10,
   "me_seconds":       10,
+  "stats_seconds":    10,
+  "bag_seconds":      10,
+  "equip_seconds":    5,
+  "shop_seconds":     15,
+  "buy_seconds":      5,
+  "levelup_seconds":  10,
+  "leaderboard_seconds": 30,
+  "unknown_cmd_seconds": 60,
 
   "global_max":             30,
   "global_window_seconds":  10

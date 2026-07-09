@@ -84,4 +84,34 @@ class LootRoller {
   }
 }
 
-module.exports = { LootRoller };
+/**
+ * Weighted pick from server-resolved reward entries
+ * ([{power_id, name, weight}, …]). Returns the entry or null.
+ */
+function rollRewardEntry(entries) {
+  const valid = (entries || []).filter(e => e && e.power_id && Number(e.weight ?? 1) > 0);
+  if (!valid.length) return null;
+  const total = valid.reduce((sum, e) => sum + Number(e.weight ?? 1), 0);
+  let r = Math.random() * total;
+  for (const e of valid) {
+    r -= Number(e.weight ?? 1);
+    if (r <= 0) return e;
+  }
+  return valid[valid.length - 1];
+}
+
+/**
+ * Highest reward tier whose bound (`key`, e.g. 'threshold' or 'min_count')
+ * is ≤ value. Returns the tier or null.
+ */
+function pickRewardTier(tiers, key, value) {
+  const sorted = (tiers || [])
+    .filter(t => t && Array.isArray(t.table))
+    .sort((a, b) => Number(b[key] ?? 0) - Number(a[key] ?? 0));
+  for (const tier of sorted) {
+    if (value >= Number(tier[key] ?? 0)) return tier;
+  }
+  return null;
+}
+
+module.exports = { LootRoller, rollRewardEntry, pickRewardTier };

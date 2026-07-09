@@ -305,6 +305,12 @@
         if (overlayWrap) overlayWrap.textContent = 'Could not load overlay URLs.';
       });
 
+    // Rewards: map Twitch events to viewer-power loot tables
+    _buildRewardsSection(body);
+
+    // Chat Party: live roster of joined chatters + quick actions
+    _buildChatPartySection(body);
+
     // DM tools: persistence mode + chat character roster
     _buildDmToolsSection(body, data.persistence_mode);
   }
@@ -368,6 +374,340 @@
       }
       sock.addEventListener('message', onMsg);
     });
+  }
+
+  // ── Rewards: Twitch events → viewer-power loot tables ──────────────────────
+
+  var _availablePowers = [];   // [{power_id, name, description}] — also feeds the Chat Party grant dropdown
+
+  function _sectionEl(title) {
+    var section = document.createElement('div');
+    section.style.cssText = 'margin-top:0.75rem;border-top:1px solid rgba(255,255,255,0.1);padding-top:0.65rem;';
+    section.innerHTML =
+      '<p style="font-size:0.68rem;color:var(--parchment-dim);margin:0 0 0.45rem;font-weight:600;letter-spacing:0.03em;">' +
+        escHtml(title) + '</p>';
+    return section;
+  }
+
+  function _buildRewardsSection(body) {
+    var section = _sectionEl('Rewards — subs, gifts & bits');
+    var wrap = document.createElement('div');
+    wrap.className = 'twitch-rewards-wrap';
+    wrap.style.cssText = 'font-size:0.64rem;color:var(--parchment-dim);';
+    wrap.textContent = 'Loading reward tables…';
+    section.appendChild(wrap);
+    body.appendChild(section);
+
+    var pending = _awaitWS('dm_chat_rewards_result', 4000);
+    if (!_sendWS({ type: 'dm_chat_rewards_get', payload: {} })) {
+      wrap.textContent = 'Not connected to the game session.';
+      return;
+    }
+    pending.then(function (p) {
+      if (!p || !p.config) { wrap.textContent = 'No response — is the session live?'; return; }
+      _availablePowers = p.available_powers || [];
+      _renderRewardsEditor(wrap, p.config);
+    });
+  }
+
+  function _renderRewardsEditor(wrap, config) {
+    wrap.innerHTML =
+      '<p style="margin:0 0 0.4rem;line-height:1.4;">Tick the powers each Twitch event can award. ' +
+      'Chatters receive a random power from the table as a usable item (!use / !target).</p>';
+
+    // groups: [{label, key, tierIndex|null, table}]
+    var groups = [{ label: 'Single sub / resub', key: 'sub', tierIndex: null, table: config.sub || [] }];
+    (config.gift_tiers || []).forEach(function (tier, i) {
+      groups.push({ label: 'Gift subs ×' + tier.min_count + '+', key: 'gift_tiers', tierIndex: i, table: tier.table || [] });
+    });
+    (config.bits_tiers || []).forEach(function (tier, i) {
+      groups.push({ label: 'Bits ' + tier.threshold + '+', key: 'bits_tiers', tierIndex: i, table: tier.table || [] });
+    });
+
+    groups.forEach(function (group) {
+      var det = document.createElement('details');
+      det.style.cssText = 'margin-bottom:0.35rem;';
+      var inTable = {};
+      group.table.forEach(function (e) { inTable[e.power_id] = e.weight || 1; });
+      var count = group.table.length;
+
+      var summary = document.createElement('summary');
+      summary.style.cssText = 'cursor:pointer;font-size:0.66rem;color:var(--parchment);';
+      summary.innerHTML = escHtml(group.label) +
+        ' <span class="rw-count" style="color:var(--parchment-dim);">(' + count + ' power' + (count === 1 ? '' : 's') + ')</span>';
+      det.appendChild(summary);
+
+      var grid = document.createElement('div');
+      grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:0.1rem 0.5rem;padding:0.3rem 0 0.2rem 0.8rem;';
+      _availablePowers.forEach(function (pw) {
+        var label = document.createElement('label');
+        label.style.cssText = 'display:flex;align-items:center;gap:0.28rem;font-size:0.62rem;color:var(--parchment-dim);cursor:pointer;';
+        label.title = pw.description || '';
+        var cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.style.cssText = 'accent-color:#9146ff;';
+        cb.checked = !!inTable[pw.power_id];
+        cb.setAttribute('data-power-id', pw.power_id);
+        cb.setAttribute('data-weight', String(inTable[pw.power_id] || 1));
+        cb.setAttribute('data-group-key', group.key);
+        cb.setAttribute('data-tier-index', group.tierIndex === null ? '' : String(group.tierIndex));
+        cb.addEventListener('change', function () {
+          var checked = grid.querySelectorAll('input:checked').length;
+          summary.querySelector('.rw-count').textContent = '(' + checked + ' power' + (checked === 1 ? '' : 's') + ')';
+        });
+        label.appendChild(cb);
+        label.appendChild(document.createTextNode(pw.name));
+        grid.appendChild(label);
+      });
+      det.appendChild(grid);
+      wrap.appendChild(det);
+    });
+
+    var btnRow = document.createElement('div');
+    btnRow.style.cssText = 'display:flex;gap:0.4rem;margin-top:0.45rem;align-items:center;';
+    btnRow.innerHTML =
+      '<button type="button" class="rw-save" style="padding:0.26rem 0.7rem;background:rgba(145,70,255,0.18);color:#b98aff;' +
+              'border:1px solid rgba(145,70,255,0.45);border-radius:5px;font-size:0.66rem;cursor:pointer;">Save rewards</button>' +
+      '<button type="button" class="rw-reset" style="padding:0.26rem 0.6rem;background:rgba(255,255,255,0.06);color:var(--parchment-dim);' +
+              'border:1px solid rgba(255,255,255,0.15);border-radius:5px;font-size:0.64rem;cursor:pointer;">Reset to defaults</button>' +
+      '<span class="rw-status" style="font-size:0.62rem;color:var(--parchment-dim);"></span>';
+    wrap.appendChild(btnRow);
+
+    function collectConfig() {
+      var out = { version: 1, sub: [], gift_tiers: [], bits_tiers: [] };
+      (config.gift_tiers || []).forEach(function (tier) {
+        out.gift_tiers.push({ min_count: tier.min_count, table: [] });
+      });
+      (config.bits_tiers || []).forEach(function (tier) {
+        out.bits_tiers.push({ threshold: tier.threshold, table: [] });
+      });
+      wrap.querySelectorAll('input[data-power-id]').forEach(function (cb) {
+        if (!cb.checked) return;
+        var entry = { power_id: cb.getAttribute('data-power-id'), weight: parseInt(cb.getAttribute('data-weight'), 10) || 1 };
+        var key = cb.getAttribute('data-group-key');
+        var tierIdx = cb.getAttribute('data-tier-index');
+        if (key === 'sub') out.sub.push(entry);
+        else if (out[key] && out[key][parseInt(tierIdx, 10)]) out[key][parseInt(tierIdx, 10)].table.push(entry);
+      });
+      return out;
+    }
+
+    function saveRewards(payload) {
+      var status = btnRow.querySelector('.rw-status');
+      status.textContent = 'Saving…';
+      var pending = _awaitWS('dm_chat_rewards_result', 4000);
+      if (!_sendWS({ type: 'dm_chat_rewards_update', payload: payload })) {
+        status.textContent = 'Not connected.';
+        return;
+      }
+      pending.then(function (p) {
+        if (p && p.config) {
+          _availablePowers = p.available_powers || _availablePowers;
+          status.textContent = 'Saved ✓ (bridge updated live)';
+          setTimeout(function () { status.textContent = ''; }, 3000);
+          _renderRewardsEditor(wrap, p.config);
+        } else {
+          status.textContent = 'Save failed — no response.';
+        }
+      });
+    }
+
+    btnRow.querySelector('.rw-save').addEventListener('click', function () {
+      saveRewards({ config: collectConfig() });
+    });
+    btnRow.querySelector('.rw-reset').addEventListener('click', function () {
+      if (!confirm('Reset all reward tables to the shipped defaults?')) return;
+      saveRewards({ reset: true });
+    });
+  }
+
+  // ── Chat Party: live roster of joined chatters ──────────────────────────────
+
+  function _relTime(epochSec) {
+    var sec = Math.max(0, Math.floor(Date.now() / 1000 - Number(epochSec || 0)));
+    if (!epochSec) return '';
+    if (sec < 60) return 'just now';
+    if (sec < 3600) return Math.floor(sec / 60) + 'm ago';
+    if (sec < 86400) return Math.floor(sec / 3600) + 'h ago';
+    return Math.floor(sec / 86400) + 'd ago';
+  }
+
+  function _buildChatPartySection(body) {
+    var section = _sectionEl('Chat Party — joined chatters');
+    var wrap = document.createElement('div');
+    wrap.className = 'twitch-chat-party-wrap';
+    wrap.style.cssText = 'font-size:0.64rem;color:var(--parchment-dim);';
+    wrap.textContent = 'Loading…';
+    section.appendChild(wrap);
+    body.appendChild(section);
+    _refreshChatParty(wrap);
+  }
+
+  function _refreshChatParty(wrap) {
+    if (!wrap || !wrap.isConnected) return;
+    var pending = _awaitWS('dm_chat_participants_result', 4000);
+    if (!_sendWS({ type: 'dm_chat_participants_get', payload: {} })) {
+      wrap.textContent = 'Not connected to the game session.';
+      return;
+    }
+    pending.then(function (p) {
+      if (!wrap.isConnected) return;
+      if (!p) { wrap.textContent = 'No response — is the session live?'; return; }
+      var list = (p.participants || []).filter(function (cp) { return cp.is_active; });
+      if (!list.length) {
+        wrap.textContent = 'No one has !joined yet. Viewers type !join in Twitch chat to enter.';
+        return;
+      }
+      wrap.innerHTML = '';
+      list.forEach(function (cp) { wrap.appendChild(_chatPartyRow(cp, wrap)); });
+    });
+  }
+
+  function _chatPartyRow(cp, wrap) {
+    var row = document.createElement('div');
+    row.style.cssText = 'padding:0.3rem 0;border-bottom:1px solid rgba(255,255,255,0.06);';
+
+    var name = cp.character_name ? (cp.character_name + ' (' + cp.twitch_username + ')') : (cp.display_name || cp.twitch_username);
+    var cls = cp.arena_class ? (cp.arena_class + ' L' + (cp.arena_level || 1)) : 'No class yet';
+    var items = (cp.inventory || []).map(function (i) {
+      var qty = (i.charges_max > 0) ? (i.charges_current + '/' + i.charges_max) : ('x' + (i.qty || 1));
+      return (i.name || 'item') + ' ' + qty;
+    });
+    var itemsLabel = items.length
+      ? (items.slice(0, 3).join(', ') + (items.length > 3 ? ' +' + (items.length - 3) + ' more' : ''))
+      : 'no usable items';
+
+    var head = document.createElement('div');
+    head.style.cssText = 'display:flex;align-items:center;gap:0.4rem;flex-wrap:wrap;';
+    head.innerHTML =
+      '<span style="font-weight:600;color:var(--parchment);">' + escHtml(name) + '</span>' +
+      '<span>' + escHtml(cls) + '</span>' +
+      '<span style="margin-left:auto;color:var(--parchment-dim);">joined ' + escHtml(_relTime(cp.joined_at)) + '</span>';
+    row.appendChild(head);
+
+    var sub = document.createElement('div');
+    sub.style.cssText = 'display:flex;align-items:center;gap:0.35rem;margin-top:0.18rem;flex-wrap:wrap;';
+    sub.innerHTML =
+      '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;" title="' + escHtml(items.join(', ')) + '">🎒 ' +
+        escHtml(itemsLabel) + '</span>' +
+      '<button class="cp-grant" style="padding:0.12rem 0.42rem;font-size:0.6rem;cursor:pointer;background:rgba(145,70,255,0.14);' +
+              'color:#b98aff;border:1px solid rgba(145,70,255,0.38);border-radius:4px;">Grant</button>' +
+      '<button class="cp-rename" style="padding:0.12rem 0.42rem;font-size:0.6rem;cursor:pointer;background:rgba(201,168,76,0.12);' +
+              'color:#c9a84c;border:1px solid rgba(201,168,76,0.3);border-radius:4px;">Rename</button>' +
+      '<button class="cp-kick" style="padding:0.12rem 0.42rem;font-size:0.6rem;cursor:pointer;background:rgba(255,255,255,0.06);' +
+              'color:var(--parchment-dim);border:1px solid rgba(255,255,255,0.18);border-radius:4px;">Kick</button>' +
+      '<button class="cp-reset" style="padding:0.12rem 0.42rem;font-size:0.6rem;cursor:pointer;background:rgba(180,30,30,0.12);' +
+              'color:#e07070;border:1px solid rgba(180,30,30,0.3);border-radius:4px;">Reset</button>';
+    row.appendChild(sub);
+
+    // Grant flyout: pick a viewer power to hand out as a usable item
+    // (same power list the Rewards tables use).
+    sub.querySelector('.cp-grant').addEventListener('click', function () {
+      var existing = row.querySelector('.cp-grant-flyout');
+      if (existing) { existing.remove(); return; }
+      var fly = document.createElement('div');
+      fly.className = 'cp-grant-flyout';
+      fly.style.cssText = 'display:flex;gap:0.3rem;align-items:center;margin-top:0.25rem;flex-wrap:wrap;';
+      var sel = document.createElement('select');
+      sel.style.cssText = 'font-size:0.62rem;background:rgba(0,0,0,0.3);color:var(--parchment);' +
+                          'border:1px solid rgba(255,255,255,0.15);border-radius:4px;padding:0.12rem 0.25rem;max-width:150px;';
+      if (_availablePowers.length) {
+        _availablePowers.forEach(function (pw) {
+          var opt = document.createElement('option');
+          opt.value = pw.power_id;
+          opt.textContent = pw.name;
+          opt.title = pw.description || '';
+          sel.appendChild(opt);
+        });
+      } else {
+        var opt = document.createElement('option');
+        opt.value = '';
+        opt.textContent = 'Powers unavailable — use custom';
+        sel.appendChild(opt);
+      }
+      var goBtn = document.createElement('button');
+      goBtn.textContent = 'Give power';
+      goBtn.style.cssText = 'padding:0.12rem 0.45rem;font-size:0.6rem;cursor:pointer;background:rgba(145,70,255,0.18);' +
+                            'color:#b98aff;border:1px solid rgba(145,70,255,0.45);border-radius:4px;';
+      var customBtn = document.createElement('button');
+      customBtn.textContent = 'Custom item…';
+      customBtn.style.cssText = 'padding:0.12rem 0.45rem;font-size:0.6rem;cursor:pointer;background:rgba(255,255,255,0.06);' +
+                                'color:var(--parchment-dim);border:1px solid rgba(255,255,255,0.15);border-radius:4px;';
+      fly.appendChild(sel); fly.appendChild(goBtn); fly.appendChild(customBtn);
+      row.appendChild(fly);
+
+      goBtn.addEventListener('click', function () {
+        var pid = sel.value;
+        if (!pid) return;
+        var pw = null;
+        _availablePowers.forEach(function (e) { if (e.power_id === pid) pw = e; });
+        _sendWS({ type: 'dm_grant_chat_participant_item', payload: {
+          twitch_username: cp.twitch_username,
+          item_entry: { name: (pw && pw.name) || pid, qty: 1, power_id: pid },
+        } });
+        fly.remove();
+        setTimeout(function () { _refreshChatParty(wrap); }, 400);
+      });
+      customBtn.addEventListener('click', function () {
+        var itemName = prompt('Item name to grant to ' + cp.twitch_username + ':');
+        if (!itemName) return;
+        _sendWS({ type: 'dm_grant_chat_participant_item', payload: {
+          twitch_username: cp.twitch_username,
+          item_entry: { name: itemName, qty: 1 },
+        } });
+        fly.remove();
+        setTimeout(function () { _refreshChatParty(wrap); }, 400);
+      });
+    });
+
+    sub.querySelector('.cp-rename').addEventListener('click', function () {
+      var newName = prompt('New character name for ' + cp.twitch_username + ':', cp.character_name || '');
+      if (newName === null) return;
+      _sendWS({ type: 'dm_chat_participant_update', payload: {
+        twitch_username: cp.twitch_username, character_name: newName,
+      } });
+      setTimeout(function () { _refreshChatParty(wrap); }, 400);
+    });
+
+    sub.querySelector('.cp-kick').addEventListener('click', function () {
+      if (!confirm('Kick ' + cp.twitch_username + ' from the chat party? They keep their character and can !join again.')) return;
+      _sendWS({ type: 'dm_chat_participant_reset', payload: {
+        twitch_username: cp.twitch_username, scope: 'kick',
+      } });
+      setTimeout(function () { _refreshChatParty(wrap); }, 400);
+    });
+
+    sub.querySelector('.cp-reset').addEventListener('click', function () {
+      var scope = prompt(
+        'Reset scope for ' + cp.twitch_username + ':\n' +
+        'all = stats + inventory + arena + name\n' +
+        'stats | inventory | arena | remove', 'all');
+      if (!scope) return;
+      scope = scope.trim().toLowerCase();
+      if (['all', 'stats', 'inventory', 'arena', 'remove'].indexOf(scope) === -1) return;
+      if (!confirm('Reset "' + scope + '" for ' + cp.twitch_username + '?')) return;
+      _sendWS({ type: 'dm_chat_participant_reset', payload: {
+        twitch_username: cp.twitch_username, scope: scope,
+      } });
+      setTimeout(function () { _refreshChatParty(wrap); }, 400);
+    });
+
+    return row;
+  }
+
+  // Live refresh: called from the WS dispatcher whenever a chat_participant_*
+  // event arrives (join/leave/loot/grant/update). Debounced; refreshes every
+  // mounted Chat Party list (settings flyout + Stream panel).
+  var _chatPartyRefreshTimer = null;
+  function notifyChatPartyEvent(type, payload) {
+    if (window.ROLE !== 'dm') return;
+    if (_chatPartyRefreshTimer) clearTimeout(_chatPartyRefreshTimer);
+    _chatPartyRefreshTimer = setTimeout(function () {
+      _chatPartyRefreshTimer = null;
+      document.querySelectorAll('.twitch-chat-party-wrap').forEach(function (wrap) {
+        _refreshChatParty(wrap);
+      });
+    }, 350);
   }
 
   function _buildDmToolsSection(body, persistenceMode) {
@@ -460,10 +800,12 @@
     });
   }
 
-  // Public API — reused by the Stream mode panel (dm_context_render.js).
+  // Public API — reused by the Stream mode panel (dm_context_render.js) and
+  // the WS dispatcher (message_dispatch.js live chat-party updates).
   window.TwitchSettingsPanel = Object.freeze({
     renderInto: renderInto,
     refresh: refresh,
+    notifyChatPartyEvent: notifyChatPartyEvent,
   });
 
   document.addEventListener('DOMContentLoaded', function () {

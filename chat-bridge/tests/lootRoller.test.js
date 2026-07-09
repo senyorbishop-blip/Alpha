@@ -1,6 +1,6 @@
 'use strict';
 
-const { LootRoller } = require('../src/lootRoller');
+const { LootRoller, rollRewardEntry, pickRewardTier } = require('../src/lootRoller');
 
 const TABLES = {
   sub: [
@@ -79,5 +79,59 @@ describe('LootRoller', () => {
     for (let i = 0; i < 50; i++) {
       expect(roller.roll('t')).toBe('B');
     }
+  });
+});
+
+describe('Server-managed reward tables (rollRewardEntry / pickRewardTier)', () => {
+  const SUB_TABLE = [
+    { power_id: 'healing_spark', name: 'Healing Spark', weight: 40 },
+    { power_id: 'give_potion', name: 'Give Potion', weight: 60 },
+  ];
+
+  test('rollRewardEntry returns an entry from the table', () => {
+    for (let i = 0; i < 30; i++) {
+      const entry = rollRewardEntry(SUB_TABLE);
+      expect(['healing_spark', 'give_potion']).toContain(entry.power_id);
+    }
+  });
+
+  test('rollRewardEntry skips zero-weight and malformed entries', () => {
+    const table = [
+      { power_id: 'never', weight: 0 },
+      { weight: 100 },                       // no power_id
+      { power_id: 'always', weight: 5 },
+    ];
+    for (let i = 0; i < 30; i++) {
+      expect(rollRewardEntry(table).power_id).toBe('always');
+    }
+  });
+
+  test('rollRewardEntry returns null for empty/missing tables', () => {
+    expect(rollRewardEntry([])).toBeNull();
+    expect(rollRewardEntry(null)).toBeNull();
+    expect(rollRewardEntry([{ power_id: 'x', weight: 0 }])).toBeNull();
+  });
+
+  test('pickRewardTier picks the highest qualifying gift tier (1 / 5 / 10+)', () => {
+    const tiers = [
+      { min_count: 1, table: [{ power_id: 'small', weight: 1 }] },
+      { min_count: 5, table: [{ power_id: 'medium', weight: 1 }] },
+      { min_count: 10, table: [{ power_id: 'big', weight: 1 }] },
+    ];
+    expect(pickRewardTier(tiers, 'min_count', 1).min_count).toBe(1);
+    expect(pickRewardTier(tiers, 'min_count', 4).min_count).toBe(1);
+    expect(pickRewardTier(tiers, 'min_count', 5).min_count).toBe(5);
+    expect(pickRewardTier(tiers, 'min_count', 25).min_count).toBe(10);
+    expect(pickRewardTier(tiers, 'min_count', 0)).toBeNull();
+  });
+
+  test('pickRewardTier works for bits thresholds', () => {
+    const tiers = [
+      { threshold: 100, table: [{ power_id: 'a', weight: 1 }] },
+      { threshold: 500, table: [{ power_id: 'b', weight: 1 }] },
+    ];
+    expect(pickRewardTier(tiers, 'threshold', 250).threshold).toBe(100);
+    expect(pickRewardTier(tiers, 'threshold', 500).threshold).toBe(500);
+    expect(pickRewardTier(tiers, 'threshold', 50)).toBeNull();
   });
 });

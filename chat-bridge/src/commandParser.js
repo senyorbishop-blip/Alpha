@@ -33,7 +33,32 @@ const DEFAULT_RESPONSES = {
   me_summary:         '@{user} — {charName} | Items: {items} | Sessions: {sessions} | Damage dealt: {damage} | Arena: {wins}W/{losses}L',
   me_not_joined:      '@{user} Type !join first to enter the game.',
   me_cooldown:        '@{user} Wait {seconds}s.',
+  unknown_command:    "@{user} I don't know that one — try !help for the command list.",
+  progression_cooldown: '@{user} Wait {seconds}s.',
 };
+
+// Usage hint per action, in display order, for the compact !help reply. Only
+// actions actually present in the command map are listed, and aliases collapse
+// to a single entry (the first command key mapped to that action).
+const ACTION_USAGE = [
+  ['join',        ''],
+  ['leave',       ''],
+  ['inventory',   ''],
+  ['target',      '<name>'],
+  ['stats',       ''],
+  ['bag',         ''],
+  ['equip',       '<item>'],
+  ['shop',        ''],
+  ['buy',         '<item>'],
+  ['levelup',     ''],
+  ['leaderboard', ''],
+  ['vote',        '<n>'],
+  ['name',        '<name>'],
+  ['me',          ''],
+  ['help',        ''],
+];
+
+const PROGRESSION_ACTIONS = new Set(['stats', 'bag', 'equip', 'shop', 'buy', 'levelup', 'leaderboard']);
 
 /**
  * Parse and dispatch Twitch chat commands.
@@ -44,13 +69,19 @@ const DEFAULT_RESPONSES = {
  * Response templates are loaded from config/responses.json.
  */
 class CommandParser {
-  constructor({ commandMap, responses, rateLimiter, gameClient, twitchClient, arenaHandler }) {
+  constructor({ commandMap, responses, rateLimiter, gameClient, twitchClient, arenaHandler, progressionHandler }) {
     this._commandMap = commandMap;
     this._responses = { ...DEFAULT_RESPONSES, ...(responses ?? {}) };
     this._rate = rateLimiter;
     this._game = gameClient;
     this._twitch = twitchClient;
     this._arenaHandler = arenaHandler || null;
+    this._progressionHandler = progressionHandler || null;
+    // Chatters who have !joined this session — used to decide whether an
+    // unknown !command deserves a gentle "!help" nudge. Only joined chatters
+    // get the nudge so the bot never replies to other bots' commands
+    // (!discord, !uptime, …) from random viewers.
+    this._joinedUsers = new Set();
   }
 
   // ---------------------------------------------------------------------------
@@ -77,14 +108,28 @@ class CommandParser {
     const cmdRaw = parts[0].toLowerCase();
     const args = parts.slice(1);
 
-    const action = this._commandMap[cmdRaw];
-    if (!action) return;
-
     const username = validateUsername(tags.username ?? tags['display-name'] ?? '');
     if (!username) return;
 
     const displayName = sanitize(String(tags['display-name'] ?? tags.username ?? username), 32);
     const userId = tags['user-id'] ?? '';
+
+    const action = this._commandMap[cmdRaw];
+    if (!action) {
+      this._handleUnknown(channel, username, displayName);
+      return;
+    }
+
+    if (PROGRESSION_ACTIONS.has(action)) {
+      if (!this._progressionHandler) return;
+      if (!this._rate.check(username, action)) {
+        const rem = this._rate.remaining(username, action);
+        this._twitch.reply(channel, username, this._t('progression_cooldown', { user: displayName, seconds: rem }));
+        return;
+      }
+      await this._progressionHandler(channel, username, displayName, action, args);
+      return;
+    }
 
     switch (action) {
       case 'join':      await this._handleJoin(channel, userId, username, displayName); break;
@@ -105,6 +150,17 @@ class CommandParser {
     }
   }
 
+  /**
+   * Unknown !command from a joined chatter → one gentle pointer to !help,
+   * per-user rate-limited so a spammer can't turn the bot into an echo.
+   * Non-joined chatters are ignored entirely.
+   */
+  _handleUnknown(channel, username, displayName) {
+    if (!this._joinedUsers.has(username)) return;
+    if (!this._rate.check(username, 'unknown_cmd')) return;
+    this._twitch.reply(channel, username, this._t('unknown_command', { user: displayName }));
+  }
+
   // ---------------------------------------------------------------------------
   // Handlers
   // ---------------------------------------------------------------------------
@@ -121,6 +177,8 @@ class CommandParser {
       twitch_user_id: userId,
       display_name: displayName,
     });
+
+    if (result) this._joinedUsers.add(username);
 
     if (result?.already_joined) {
       this._twitch.reply(channel, username, this._t('join_already', { user: displayName }));
@@ -143,6 +201,7 @@ class CommandParser {
       twitch_user_id: userId,
       display_name: displayName,
     });
+    this._joinedUsers.delete(username);
     this._twitch.reply(channel, username, this._t('leave_success', { user: displayName }));
   }
 
@@ -162,6 +221,7 @@ class CommandParser {
       this._twitch.reply(channel, username, this._t('inventory_not_joined', { user: displayName }));
       return;
     }
+    this._joinedUsers.add(username);
 
     const items = result.items ?? [];
     if (items.length === 0) {
@@ -210,6 +270,10 @@ class CommandParser {
         item: result.item_name ?? 'item',
         target: result.target_name ?? targetName,
       }));
+    } else if (result?.error_code === 'no_item') {
+      this._twitch.reply(channel, username, this._t('target_no_item', { user: displayName }));
+    } else if (result?.error_code === 'not_joined') {
+      this._twitch.reply(channel, username, this._t('target_not_joined', { user: displayName }));
     } else {
       this._twitch.reply(channel, username, this._t('target_miss', {
         user: displayName,
@@ -219,10 +283,24 @@ class CommandParser {
   }
 
   _handleHelp(channel, username) {
-    const cmds = Object.keys(this._commandMap)
-      .filter(k => !k.startsWith('_'))
-      .join(' ');
-    this._twitch.reply(channel, username, this._t('help_header', { commands: cmds }));
+    // Compact list with usage hints. Aliases collapse to one entry per action
+    // (first mapped command wins), arena commands get a combined hint.
+    const byAction = {};
+    for (const [cmd, action] of Object.entries(this._commandMap)) {
+      if (cmd.startsWith('_')) continue;
+      if (!byAction[action]) byAction[action] = cmd;
+    }
+
+    const parts = [];
+    for (const [action, usage] of ACTION_USAGE) {
+      const cmd = byAction[action];
+      if (!cmd) continue;
+      parts.push(usage ? `${cmd} ${usage}` : cmd);
+    }
+    if (byAction.arena) {
+      parts.push('!duel <name>', '!accept', '!decline');
+    }
+    this._twitch.reply(channel, username, this._t('help_header', { commands: parts.join(', ') }));
   }
 
   async _handleVote(channel, username, displayName, args) {
