@@ -770,31 +770,46 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, user_id: str
         except Exception:
             logger.exception("[chat-bridge] auto-start scheduling failed")
 
-    # Send full state on connect (DM gets POI dm_notes, others don't)
-    state = session.to_state_dict_for_role(user.role, user_id)
-    logger.info("[live_state] initial_state_sync %s", build_live_state_debug_summary(session, user_id, user.role, state))
-    await manager.send_to(session_id, user_id, {
-        "type": "state_sync",
-        "payload": state
-    })
-    try:
-        setattr(user, "_last_initial_state_sync_at", time.monotonic())
-    except Exception:
-        pass
-    snapshot_v2 = session.to_authoritative_snapshot_for_role(user.role, user_id, source="ws_connect")
-    snapshot_payload = snapshot_v2.get("payload") if isinstance(snapshot_v2.get("payload"), dict) else {}
-    character_block = snapshot_payload.get("character") if isinstance(snapshot_payload.get("character"), dict) else {}
-    inventory_block = snapshot_payload.get("inventory") if isinstance(snapshot_payload.get("inventory"), dict) else {}
-    spells_block = snapshot_payload.get("spells") if isinstance(snapshot_payload.get("spells"), dict) else {}
-    logger.info(
-        "[live_state] snapshot_character_block session_id=%s user_id=%s active_profile_id=%s character_hydration=%s inventory_hydration=%s spells_hydration=%s",
-        session_id, user_id,
-        character_block.get("active_profile_id") or "",
-        character_block.get("hydration_status") or "unknown",
-        inventory_block.get("hydration_status") or "unknown",
-        spells_block.get("hydration_status") or "unknown",
-    )
-    await manager.send_to(session_id, user_id, snapshot_v2)
+    # Send full state on connect (DM gets POI dm_notes, others don't).
+    # Reconnects (client passes ?reason=reconnect) skip this unconditional
+    # send: every current client immediately issues request_state with its
+    # known per-domain revisions, and handle_request_state answers with a
+    # delta that omits unchanged heavy domains (server/state_delta.py).
+    defer_state_to_request = str(reason or "").strip().lower() == "reconnect"
+    if defer_state_to_request:
+        logger.info(
+            "[live_state] initial_state_sync deferred to request_state (reconnect delta) session_id=%s user_id=%s",
+            session_id, user_id,
+        )
+    else:
+        from server.state_delta import apply_reconnect_delta
+        state = session.to_state_dict_for_role(user.role, user_id)
+        # Fresh connect: nothing known client-side, so no domain is omitted —
+        # this only attaches domain_revisions for the client to echo later.
+        apply_reconnect_delta(state, None)
+        logger.info("[live_state] initial_state_sync %s", build_live_state_debug_summary(session, user_id, user.role, state))
+        await manager.send_to(session_id, user_id, {
+            "type": "state_sync",
+            "payload": state
+        })
+        try:
+            setattr(user, "_last_initial_state_sync_at", time.monotonic())
+        except Exception:
+            pass
+        snapshot_v2 = session.to_authoritative_snapshot_for_role(user.role, user_id, source="ws_connect")
+        snapshot_payload = snapshot_v2.get("payload") if isinstance(snapshot_v2.get("payload"), dict) else {}
+        character_block = snapshot_payload.get("character") if isinstance(snapshot_payload.get("character"), dict) else {}
+        inventory_block = snapshot_payload.get("inventory") if isinstance(snapshot_payload.get("inventory"), dict) else {}
+        spells_block = snapshot_payload.get("spells") if isinstance(snapshot_payload.get("spells"), dict) else {}
+        logger.info(
+            "[live_state] snapshot_character_block session_id=%s user_id=%s active_profile_id=%s character_hydration=%s inventory_hydration=%s spells_hydration=%s",
+            session_id, user_id,
+            character_block.get("active_profile_id") or "",
+            character_block.get("hydration_status") or "unknown",
+            inventory_block.get("hydration_status") or "unknown",
+            spells_block.get("hydration_status") or "unknown",
+        )
+        await manager.send_to(session_id, user_id, snapshot_v2)
 
     # Send item library sync with only the SRD version.  The SRD list is large,
     # so clients request it separately only when their local versioned cache is

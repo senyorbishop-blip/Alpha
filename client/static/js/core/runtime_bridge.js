@@ -98,14 +98,23 @@
         // exactly once per real socket open — never once per boot module and
         // never repeatedly during a reconnect storm.
         const sendInitialStateRequests = function () {
+          // Reconnect delta: echo per-domain revisions from the last sync plus
+          // live-tracked counters so the server can omit unchanged heavy
+          // domains (tokens/fog/editor/char_profiles/inventory).
+          let knownRevisions;
+          try {
+            if (typeof global.collectKnownStateRevisions === 'function') knownRevisions = global.collectKnownStateRevisions();
+          } catch (_err) { knownRevisions = undefined; }
+          const requestStatePayload = { reason: 'reconnect' };
+          if (knownRevisions && Object.keys(knownRevisions).length) requestStatePayload.known_revisions = knownRevisions;
           if (global.AppWS && typeof global.AppWS.send === 'function') {
             if (global.liveDebugLog) global.liveDebugLog('websocket open/request_state', { role: effectiveRole, reason: 'reconnect' });
             console.debug('[WS] requesting authoritative state_sync after open');
             if (global.__PLAY_BOOT_ROLE === 'player' && typeof global.__playerBootCheckpoint === 'function') global.__playerBootCheckpoint('PLAYER_BOOT_REQUEST_STATE_SENT');
-            global.AppWS.send({ type: 'request_state', payload: { reason: 'reconnect' } });
+            global.AppWS.send({ type: 'request_state', payload: requestStatePayload });
           } else if (typeof global.sendWS === 'function') {
             if (global.__PLAY_BOOT_ROLE === 'player' && typeof global.__playerBootCheckpoint === 'function') global.__playerBootCheckpoint('PLAYER_BOOT_REQUEST_STATE_SENT');
-            global.sendWS({ type: 'request_state', payload: { reason: 'reconnect' } });
+            global.sendWS({ type: 'request_state', payload: requestStatePayload });
           }
           if (effectiveRole === 'dm' || effectiveRole === 'player') {
             if (global.AppWS && typeof global.AppWS.send === 'function') global.AppWS.send({ type: 'treasury_get', payload: {} });

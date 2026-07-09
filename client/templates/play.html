@@ -5199,6 +5199,30 @@ function _isStaleInventoryPayload(payload) {
 // newer token snapshot/event can be dropped instead of rubber-banding or
 // resurrecting stale token state.
 let _lastTokenStateRevision = 0;
+
+// ── Reconnect delta sync ─────────────────────────────────────────────────────
+// The server tags every state_sync with per-domain content revisions
+// (payload.domain_revisions). On reconnect the client echoes them — plus its
+// live-tracked monotonic counters — via request_state.known_revisions, and the
+// server omits heavy domains (tokens/fog/editor/char_profiles/inventory) whose
+// content did not change. Omitted domains simply lack their payload keys; the
+// state_sync handler only clears/applies a domain when its keys are present.
+window.__stateDomainRevisions = window.__stateDomainRevisions || {};
+function collectKnownStateRevisions() {
+  const out = Object.assign({}, window.__stateDomainRevisions || {});
+  const tokenRev = Number(_lastTokenStateRevision || 0);
+  if (tokenRev > 0) out.token_state_revision = tokenRev;
+  const visRev = Math.max(
+    Number(_lastVisibilityRevisionByStream.tokens || 0),
+    Number(_lastVisibilityRevisionByStream.combat || 0),
+  );
+  if (visRev > 0) out.visibility_revision = visRev;
+  const invRev = Number((typeof getLastInventoryRevision === 'function' ? getLastInventoryRevision() : 0) || 0);
+  if (invRev > 0) out.inventory_revision = invRev;
+  return out;
+}
+window.collectKnownStateRevisions = collectKnownStateRevisions;
+
 function _isStaleTokenStateEvent(payload) {
   const rev = Number(payload && payload.token_state_revision);
   if (!Number.isFinite(rev)) return false;
@@ -26754,11 +26778,23 @@ function handleLegacyMessage(msg) {
       window.__stateSyncApplying = true;
       try {
       // Routine state_sync must not re-run authority redirect logic; identity is resolved at boot/ws_preconnect.
+      // Delta reconnect syncs omit unchanged heavy domains entirely — a domain
+      // is only cleared + re-applied when its payload keys are present.
+      // (Full syncs always carry every key, so these guards are no-ops there.)
+      const __syncHasTokens = ('tokens' in p);
+      const __syncHasCharProfiles = ('char_profiles' in p);
+      const __syncHasEditor = ('editor_layers' in p) || ('editor_walls' in p) || ('editor_props' in p);
+      const __syncHasInventory = ('player_inventories' in p) || ('player_inventory' in p);
+      if (p.domain_revisions && typeof p.domain_revisions === 'object') {
+        window.__stateDomainRevisions = { ...p.domain_revisions };
+      }
       // Full state load
-      Object.keys(tokens).forEach(k => delete tokens[k]);
+      if (__syncHasTokens) {
+        Object.keys(tokens).forEach(k => delete tokens[k]);
+        Object.keys(_stagingTokens).forEach(k => delete _stagingTokens[k]);
+        _mapTokensByContext = {};
+      }
       Object.keys(users).forEach(k => delete users[k]);
-      Object.keys(_stagingTokens).forEach(k => delete _stagingTokens[k]);
-      _mapTokensByContext = {};
       Object.keys(journalEntries).forEach(k => delete journalEntries[k]);
       _sessionQuests = [];
       _questBoardBindings = [];
@@ -26773,15 +26809,17 @@ function handleLegacyMessage(msg) {
       _logsSelectedType = null;
       _logsSelectedId   = null;
       itemLibraryEntries = {};
-      charProfiles = [];
-      refreshCharProfileSelect();
+      if (__syncHasCharProfiles) {
+        charProfiles = [];
+        refreshCharProfileSelect();
+      }
 
       _worldMapImageUrl = p.map_image_url || null;
 
       // Token projection into live-map vs staging is intentionally deferred until
       // after map navigation settles below (applyAuthoritativeTokenSync). This keeps
       // one authority path for active-scene token derivation on reconnect/state_sync.
-      const crossScenePlayerTokenCount = Object.values(p.tokens || {}).filter(t => {
+      const crossScenePlayerTokenCount = Object.values((__syncHasTokens && p.tokens) || {}).filter(t => {
         if (!t || !t.owner_id || t.staged) return false;
         const tokenCtx = String(t.map_context || 'world');
         const dmCtx = String((p.dm_map_context && p.dm_map_context !== 'world') ? p.dm_map_context : 'world');
@@ -26817,23 +26855,27 @@ function handleLegacyMessage(msg) {
       loadEncounterTemplates(p.encounter_templates || []);
       if (ROLE === 'dm' && typeof p.dm_notes === 'string') loadDmNotes(p.dm_notes);
       loadItemLibraryEntries(p.item_library_entries || []);
-      loadCharProfiles(p.char_profiles || []);
+      if (__syncHasCharProfiles) loadCharProfiles(p.char_profiles || []);
       initPollFromState(p.active_poll || null);
       _initPollDmControls();
-      _editorLayersAll = preserveDirtyEditorContextInSync('terrain', p.editor_layers || {});
-      if (shouldReloadEditorLayerFromSync('terrain')) ensureEditorLayerLoaded(true);
-      _editorWallsAll = preserveDirtyEditorContextInSync('walls', p.editor_walls || {});
-      if (shouldReloadEditorLayerFromSync('walls')) ensureEditorWallsLoaded(true);
-      _editorPropsAll = preserveDirtyEditorContextInSync('props', p.editor_props || {});
-      if (shouldReloadEditorLayerFromSync('props')) ensureEditorPropsLoaded(true);
-      _mapSettingsAll = { ...(p.map_settings || {}) };
+      if (__syncHasEditor) {
+        _editorLayersAll = preserveDirtyEditorContextInSync('terrain', p.editor_layers || {});
+        if (shouldReloadEditorLayerFromSync('terrain')) ensureEditorLayerLoaded(true);
+        _editorWallsAll = preserveDirtyEditorContextInSync('walls', p.editor_walls || {});
+        if (shouldReloadEditorLayerFromSync('walls')) ensureEditorWallsLoaded(true);
+        _editorPropsAll = preserveDirtyEditorContextInSync('props', p.editor_props || {});
+        if (shouldReloadEditorLayerFromSync('props')) ensureEditorPropsLoaded(true);
+        _mapSettingsAll = { ...(p.map_settings || {}) };
+      }
       applyGridSizeFromSettings();
       refreshPingPermissionUi();
       if (currentTool === 'ping' && !canCurrentUserPingMap(false)) setTool('select');
-      _editorPathsAll = { ...(p.editor_paths || {}) };
-      _editorLabelsAll = { ...(p.editor_labels || {}) };
-      _editorMarkersAll = { ...(p.editor_markers || {}) };
-      _editorLightsAll = { ...(p.editor_lights || {}) };
+      if (__syncHasEditor) {
+        _editorPathsAll = { ...(p.editor_paths || {}) };
+        _editorLabelsAll = { ...(p.editor_labels || {}) };
+        _editorMarkersAll = { ...(p.editor_markers || {}) };
+        _editorLightsAll = { ...(p.editor_lights || {}) };
+      }
       viewerProfiles = { ...(p.viewer_profiles || {}) };
       viewerPendingActions = { ...(p.viewer_pending_actions || {}) };
       viewerPowerCatalog = { ...(p.viewer_power_catalog || {}) };
@@ -26846,9 +26888,11 @@ function handleLegacyMessage(msg) {
       corpseDmConfig = { ...(p.corpse_dm_config || {}) };
       renderEconomyCampaignSettings();
       if (_hazardEditZoneId && !hazardZones[_hazardEditZoneId]) _hazardEditZoneId = '';
-      ensureEditorPathsLoaded(true);
-      ensureEditorLabelsLoaded(true);
-      ensureEditorMarkersLoaded(true);
+      if (__syncHasEditor) {
+        ensureEditorPathsLoaded(true);
+        ensureEditorLabelsLoaded(true);
+        ensureEditorMarkersLoaded(true);
+      }
       renderHazardZones();
 
       // Load POIs
@@ -26937,7 +26981,9 @@ function handleLegacyMessage(msg) {
       // token_state_revision ordering, but we still route it through the shared apply
       // path so revision/suppression tracking starts from a known-correct baseline.
       _lastTokenStateRevision = Math.max(_lastTokenStateRevision, Number(p.token_state_revision) || 0);
-      applyAuthoritativeTokenSnapshot({ tokens: p.tokens || {}, token_state_revision: _lastTokenStateRevision }, 'state_sync');
+      if (__syncHasTokens) {
+        applyAuthoritativeTokenSnapshot({ tokens: p.tokens || {}, token_state_revision: _lastTokenStateRevision }, 'state_sync');
+      }
       applyAuthoritativeMapContext({ dm_map_context: dmCtx, nav_version: Number(p.map_nav_version) || 0, map_mode: onLocal ? 'local' : 'world' }, 'state_sync');
       if (ROLE === 'dm' && crossScenePlayerTokenCount > 0) {
         setTimeout(() => showToast(`${crossScenePlayerTokenCount} token${crossScenePlayerTokenCount>1?'s':''} in staging from other maps`), 800);
@@ -26977,7 +27023,7 @@ function handleLegacyMessage(msg) {
       }
       requestRenderFrame('state_sync render');
       liveDebugLog('state_sync applied', buildClientLiveStateSummary('state_sync', p, { hidden_tokens_filtered: Number(p.hidden_tokens_filtered) || undefined, fog_hidden_tokens_filtered: Number(p.fog_hidden_tokens_filtered) || undefined }));
-      const _stateSyncInventoryStale = _isStaleInventoryPayload(p);
+      const _stateSyncInventoryStale = __syncHasInventory ? _isStaleInventoryPayload(p) : true;
       liveDebugLog('state_sync inventory ' + (_stateSyncInventoryStale ? 'ignored' : 'applied'), buildClientLiveStateSummary('state_sync', p, { ignored: _stateSyncInventoryStale }));
       if (!_stateSyncInventoryStale) applyPlayerInventoryState(p);
       if (p.quick_actions && typeof p.quick_actions === 'object') applyQuickActionsSync(p.quick_actions, 'state_sync');

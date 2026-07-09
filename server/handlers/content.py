@@ -1071,8 +1071,18 @@ async def handle_chat_message(payload: dict, session: Session, user: User):
 
 
 async def handle_request_state(payload: dict, session: Session, user: User):
-    """Send full state snapshot to requesting user."""
+    """Send a state snapshot to the requesting user.
+
+    Reconnecting clients include ``known_revisions`` (their live-tracked
+    counters plus the ``domain_revisions`` map from their last sync); heavy
+    domains whose content has not changed since are omitted from the response
+    (see server/state_delta.py). Clients without ``known_revisions`` receive
+    the full snapshot exactly as before.
+    """
+    from server.state_delta import apply_reconnect_delta
+
     reason = str((payload or {}).get("reason") or "").strip().lower()
+    known_revisions = (payload or {}).get("known_revisions")
     now = time.monotonic()
     last_initial = float(getattr(user, "_last_initial_state_sync_at", 0.0) or 0.0)
     skip_duplicate_reconnect_state = reason == "reconnect" and last_initial and (now - last_initial) < 2.0
@@ -1083,7 +1093,12 @@ async def handle_request_state(payload: dict, session: Session, user: User):
         )
     else:
         state = session.to_state_dict_for_role(user.role, user.id)
-        logger.info("[live_state] request_state reason=%s summary=%s", reason, build_live_state_debug_summary(session, user.id, user.role, state))
+        apply_reconnect_delta(state, known_revisions if reason == "reconnect" else None)
+        logger.info(
+            "[live_state] request_state reason=%s delta=%s omitted_domains=%s summary=%s",
+            reason, state.get("delta"), ",".join(state.get("omitted_domains") or []) or "none",
+            build_live_state_debug_summary(session, user.id, user.role, state),
+        )
         await manager.send_to(session.id, user.id, {
             "type": "state_sync",
             "payload": state

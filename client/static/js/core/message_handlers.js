@@ -548,13 +548,22 @@
   }
   function handleStateSync(payload, env) {
     const p = payload || {};
+    // Delta reconnect syncs omit unchanged heavy domains (their payload keys
+    // are absent) — mirror play.html's inline handler and only clear/apply a
+    // domain when its keys are present. Full syncs always carry every key.
+    const syncHasTokens = ('tokens' in p);
+    const syncHasCharProfiles = ('char_profiles' in p);
+    const syncHasEditor = ('editor_layers' in p) || ('editor_walls' in p) || ('editor_props' in p);
+    if (p.domain_revisions && typeof p.domain_revisions === 'object') {
+      window.__stateDomainRevisions = { ...p.domain_revisions };
+    }
     env.clearStateSyncCollections();
     env.setWorldMapImageUrl(p.map_image_url || null);
     env.setWorldMapLayers(p.world_map_layers || []);
 
     const syncCtx = (p.dm_map_context && p.dm_map_context !== 'world') ? p.dm_map_context : 'world';
     let stagingCount = 0;
-    Object.values(p.tokens || {}).forEach(t => {
+    Object.values((syncHasTokens && p.tokens) || {}).forEach(t => {
       if (t.maxHp && t.hp === undefined) t.hp = t.maxHp;
       const tCtx = t.map_context || 'world';
       env.cacheTokenByContext(t);
@@ -581,26 +590,30 @@
     env.loadJournalEntries(p.journal_entries || []);
     env.loadLibraryEntries(p.library_entries || []);
     env.loadItemLibraryEntries(p.item_library_entries || []);
-    env.loadCharProfiles(p.char_profiles || []);
+    if (syncHasCharProfiles) env.loadCharProfiles(p.char_profiles || []);
 
-    env.setEditorLayersAll(env.preserveDirtyEditorContextInSync('terrain', p.editor_layers || {}));
-    if (env.shouldReloadEditorLayerFromSync('terrain')) env.ensureEditorLayerLoaded(true);
-    env.setEditorWallsAll(env.preserveDirtyEditorContextInSync('walls', p.editor_walls || {}));
-    if (env.shouldReloadEditorLayerFromSync('walls')) env.ensureEditorWallsLoaded(true);
-    env.setEditorPropsAll(env.preserveDirtyEditorContextInSync('props', p.editor_props || {}));
-    if (env.shouldReloadEditorLayerFromSync('props')) env.ensureEditorPropsLoaded(true);
-    env.setMapSettingsAll({ ...(p.map_settings || {}) });
-    env.setEditorPathsAll({ ...(p.editor_paths || {}) });
-    env.setEditorLabelsAll({ ...(p.editor_labels || {}) });
-    env.setEditorMarkersAll({ ...(p.editor_markers || {}) });
-    env.setEditorLightsAll({ ...(p.editor_lights || {}) });
+    if (syncHasEditor) {
+      env.setEditorLayersAll(env.preserveDirtyEditorContextInSync('terrain', p.editor_layers || {}));
+      if (env.shouldReloadEditorLayerFromSync('terrain')) env.ensureEditorLayerLoaded(true);
+      env.setEditorWallsAll(env.preserveDirtyEditorContextInSync('walls', p.editor_walls || {}));
+      if (env.shouldReloadEditorLayerFromSync('walls')) env.ensureEditorWallsLoaded(true);
+      env.setEditorPropsAll(env.preserveDirtyEditorContextInSync('props', p.editor_props || {}));
+      if (env.shouldReloadEditorLayerFromSync('props')) env.ensureEditorPropsLoaded(true);
+      env.setMapSettingsAll({ ...(p.map_settings || {}) });
+      env.setEditorPathsAll({ ...(p.editor_paths || {}) });
+      env.setEditorLabelsAll({ ...(p.editor_labels || {}) });
+      env.setEditorMarkersAll({ ...(p.editor_markers || {}) });
+      env.setEditorLightsAll({ ...(p.editor_lights || {}) });
+    }
     env.setViewerProfiles({ ...(p.viewer_profiles || {}) });
     env.setViewerPendingActions({ ...(p.viewer_pending_actions || {}) });
     env.setViewerPowerCatalog({ ...(p.viewer_power_catalog || {}) });
     env.setHazardZones({ ...(p.hazard_zones || {}) });
-    env.ensureEditorPathsLoaded(true);
-    env.ensureEditorLabelsLoaded(true);
-    env.ensureEditorMarkersLoaded(true);
+    if (syncHasEditor) {
+      env.ensureEditorPathsLoaded(true);
+      env.ensureEditorLabelsLoaded(true);
+      env.ensureEditorMarkersLoaded(true);
+    }
     env.renderHazardZones();
 
     env.setPoisAll(p.pois || {});
@@ -631,7 +644,7 @@
       }
     }
 
-    env.applyAuthoritativeTokenSync({ tokens: p.tokens || {} });
+    if (syncHasTokens) env.applyAuthoritativeTokenSync({ tokens: p.tokens || {} });
     if (p.fog_maps !== undefined) env.fogApplyState(p);
     if (p.combat !== undefined) env.combatApplyState(p.combat);
     env.drawFrame();
