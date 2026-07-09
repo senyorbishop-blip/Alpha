@@ -43,7 +43,7 @@ _TWITCH_TOKEN_URL = "https://id.twitch.tv/oauth2/token"
 _TWITCH_REVOKE_URL = "https://id.twitch.tv/oauth2/revoke"
 _TWITCH_USERS_URL = "https://api.twitch.tv/helix/users"
 
-_OAUTH_SCOPES = "chat:read chat:edit channel:read:subscriptions bits:read channel:read:raids"
+_OAUTH_SCOPES = "chat:read chat:edit channel:read:subscriptions bits:read"
 
 # CSRF state expiry
 _STATE_TTL_SECONDS = 600
