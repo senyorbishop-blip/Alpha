@@ -21,6 +21,10 @@
   "!buy":         "buy",
   "!levelup":     "levelup",
   "!leaderboard": "leaderboard",
+  "!quest":       "quest",
+  "!heal":        "heal",
+  "!rebirth":     "rebirth",
+  "!graveyard":   "graveyard",
   "!duel":        "arena",
   "!accept":      "arena",
   "!decline":     "arena"

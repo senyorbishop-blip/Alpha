@@ -115,7 +115,10 @@ class Arena {
         case 'duel':
           return this._handleDuel(channel, username, displayName, args)
             .catch(err => this._logger.error('[Arena] handleCommand error:', err));
-        case 'accept':  this._handleAccept(channel, username, displayName); break;
+        // _handleAccept is async too (re-checks both fighters' availability).
+        case 'accept':
+          return this._handleAccept(channel, username, displayName)
+            .catch(err => this._logger.error('[Arena] handleCommand error:', err));
         case 'decline': this._handleDecline(channel, username, displayName); break;
         case 'attack':
         case 'defend':
@@ -199,17 +202,64 @@ class Arena {
       return;
     }
 
+    // Permadeath / quest busy-state: neither fighter may be dead or away on a
+    // quest. The target check never creates a sheet, so challenging a chatter
+    // who has never played stays possible (their sheet rolls at duel start).
+    // (Guarded so the no-progression flow stays fully synchronous.)
+    if (this._progression) {
+      if (!await this._checkEligibility(channel, username, username, true)) return;
+      if (!await this._checkEligibility(channel, username, targetName, false)) return;
+    }
+
     const expiresAt = Date.now() + CHALLENGE_TTL;
     this._challenges.set(targetName, { challenger: username, challengerDisplay: displayName, challenged: targetName, channel, expiresAt });
 
     this._twitch.say(channel, `${mention(targetName)} ${displayName} challenges you to a duel! Type !accept or !decline in ${Math.round(CHALLENGE_TTL / 1000)}s.`);
   }
 
-  _handleAccept(channel, username, displayName) {
+  /**
+   * Is `who` free to duel (alive + not questing)? Replies to `replyTo` and
+   * returns false when not. selfCheck=true creates a sheet for the asker
+   * (they typed the command); target checks never create phantom sheets.
+   */
+  async _checkEligibility(channel, replyTo, who, selfCheck) {
+    if (!this._progression) return true;
+    let elig = { ok: true };
+    try {
+      elig = await this._progression.duelEligibility(who, { createIfMissing: selfCheck });
+    } catch (err) {
+      this._logger.error('[Arena] eligibility check error:', err);
+      return true; // fail open — the duel itself falls back to base stats
+    }
+    if (elig.ok) return true;
+    const whose = selfCheck ? 'You are' : `${mention(who)} is`;
+    if (elig.reason === 'dead') {
+      this._twitch.reply(channel, replyTo,
+        selfCheck
+          ? 'You are dead! 💀 Type !stats to be reborn before dueling.'
+          : `${mention(who)} is dead — they must !stats to be reborn first.`);
+    } else {
+      const mins = Math.max(1, Math.ceil((elig.remainingMs || 0) / 60000));
+      this._twitch.reply(channel, replyTo, `${whose} off questing (returns in ${mins}m).`);
+    }
+    return false;
+  }
+
+  async _handleAccept(channel, username, displayName) {
     const challenge = this._challenges.get(username);
     if (!challenge || Date.now() > challenge.expiresAt) {
       this._twitch.reply(channel, username, "No pending challenge for you.");
       return;
+    }
+
+    // Either fighter may have died or set off on a quest since the challenge.
+    // (Guarded so the no-progression flow stays fully synchronous.)
+    if (this._progression) {
+      if (!await this._checkEligibility(channel, username, username, true)) return;
+      if (!await this._checkEligibility(channel, username, challenge.challenger, false)) {
+        this._challenges.delete(username);
+        return;
+      }
     }
 
     this._challenges.delete(username);
@@ -249,14 +299,18 @@ class Arena {
   }
 
   async _fighterStats(username) {
-    const fallback = { maxHp: ARENA_HP, ac: ARENA_AC, atkBonus: 0 };
+    const fallback = { maxHp: ARENA_HP, ac: ARENA_AC, atkBonus: 0, startHp: ARENA_HP, potions: 0 };
     if (!this._progression) return fallback;
     try {
       const stats = await this._progression.combatStatsFor(username);
+      const maxHp = Math.max(1, Number(stats.maxHp) || ARENA_HP);
       return {
-        maxHp: Math.max(1, Number(stats.maxHp) || ARENA_HP),
+        maxHp,
         ac: Math.max(1, Number(stats.ac) || ARENA_AC),
         atkBonus: Number(stats.atkBonus) || 0,
+        // Unhealed quest injuries reduce the HP a fighter brings into a duel.
+        startHp: Math.min(maxHp, Math.max(1, Number(stats.startHp) || maxHp)),
+        potions: Math.max(0, Number(stats.potions) || 0),
       };
     } catch (err) {
       this._logger.error('[Arena] progression stats error:', err);
@@ -276,8 +330,8 @@ class Arena {
     const state = {
       channel,
       participants: {
-        [challenger]: { username: challenger, hp: chStats.maxHp, name: challenger, ...chStats },
-        [challenged]: { username: challenged, hp: cdStats.maxHp, name: challenged, ...cdStats },
+        [challenger]: { username: challenger, name: challenger, ...chStats, hp: chStats.startHp ?? chStats.maxHp, potionUsed: false },
+        [challenged]: { username: challenged, name: challenged, ...cdStats, hp: cdStats.startHp ?? cdStats.maxHp, potionUsed: false },
       },
       round: 0,
       finished: false,
@@ -287,14 +341,19 @@ class Arena {
     this._activeDuels.set(challenger, state);
     this._activeDuels.set(challenged, state);
 
-    this._twitch.say(channel, `⚔️ ARENA DUEL: ${mention(challenger)} vs ${mention(challenged)} — Fight begins!`);
+    const wounded = [challenger, challenged]
+      .filter(u => state.participants[u].hp < state.participants[u].maxHp)
+      .map(u => `${mention(u)} enters wounded (${state.participants[u].hp}/${state.participants[u].maxHp} HP)`)
+      .join(', ');
+    this._twitch.say(channel,
+      `⚔️ ARENA DUEL: ${mention(challenger)} vs ${mention(challenged)} — Fight begins!${wounded ? ` ${wounded}.` : ''}`);
 
     this._onDisplay({
       event_type: 'duel_start',
       challenger,
       opponent: challenged,
-      challenger_hp: chStats.maxHp,
-      opponent_hp: cdStats.maxHp,
+      challenger_hp: state.participants[challenger].hp,
+      opponent_hp: state.participants[challenged].hp,
       challenger_max_hp: chStats.maxHp,
       opponent_max_hp: cdStats.maxHp,
       round: 0,
@@ -329,11 +388,16 @@ class Arena {
         const rollLabel = atk ? `${roll}+${atk}` : `${roll}`;
         messages.push(`Round ${r + 1}: ${mention(attacker)} rolled ${rollLabel} — ${flavour}! ${mention(defender)} takes ${dmg} damage. (${p[defender].hp}/${p[defender].maxHp || ARENA_HP} HP remaining)`);
         if (p[defender].hp <= 0) {
-          messages.push(`💀 ${mention(defender)} has been defeated! ${mention(attacker)} wins the duel!`);
-          state.finished = true;
-          state.winner = attacker;
-          state.loser = defender;
-          break;
+          const potionMsg = this._tryAutoPotion(state, defender);
+          if (potionMsg) {
+            messages.push(potionMsg);
+          } else {
+            messages.push(`💀 ${mention(defender)} has been defeated! ${mention(attacker)} wins the duel!`);
+            state.finished = true;
+            state.winner = attacker;
+            state.loser = defender;
+            break;
+          }
         }
       } else {
         messages.push(`Round ${r + 1}: ${mention(attacker)} rolled ${roll} — miss! ${mention(defender)} dodges.`);
@@ -382,6 +446,26 @@ class Arena {
       }, i * MSG_INTERVAL);
       this._messageTimers.add(timer);
     });
+  }
+
+  /**
+   * Death-blow save: with the DM's auto_potion config toggle on (default
+   * off), a fighter holding a Healing Potion auto-drinks it the first time
+   * they would drop, returning to half max HP. The consumed potion syncs to
+   * their sheet immediately.
+   */
+  _tryAutoPotion(state, username) {
+    if (!this._config.autoPotion) return null;
+    const fighter = state.participants[username];
+    if (!fighter || fighter.potionUsed || (fighter.potions || 0) <= 0) return null;
+    fighter.potionUsed = true;
+    fighter.potions -= 1;
+    fighter.hp = Math.max(1, Math.ceil((fighter.maxHp || ARENA_HP) / 2));
+    if (this._progression) {
+      this._progression.consumePotions(username, 1).catch(err =>
+        this._logger.error('[Arena] potion consume error:', err));
+    }
+    return `🧪 ${mention(username)} gulps a Healing Potion at death's door — back up to ${fighter.hp} HP!`;
   }
 
   // ── Interactive mode ─────────────────────────────────────────────────────────
@@ -452,6 +536,13 @@ class Arena {
     }
 
     this._twitch.say(state.channel, msg);
+
+    // Death-blow save before the KO check (auto_potion toggle)
+    const downed = Object.values(p).find(pp => pp.hp <= 0);
+    if (downed) {
+      const potionMsg = this._tryAutoPotion(state, downed.username);
+      if (potionMsg) this._twitch.say(state.channel, potionMsg);
+    }
 
     // Check for KO
     const loser = Object.values(p).find(pp => pp.hp <= 0);

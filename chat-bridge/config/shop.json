@@ -1,0 +1,16 @@
+{
+  "_comment": "Arena shop catalog override. The shop is the GOOD gear (uncommon/rare/epic) plus Healing Potions, priced as a meaningful gold sink — basic (common) gear drops from quests instead (see quests.json). Bonuses: atk/ac/hp are flat combat bonuses; ability keys (str/dex/con/int/wis/cha) raise the score while equipped. consumable:true items stack as potions instead of entering the bag.",
+  "catalog": [
+    { "id": "steel_sword",    "name": "Steel Sword",           "slot": "weapon",  "cost": 160,  "rarity": "uncommon", "bonuses": { "atk": 2 } },
+    { "id": "flamebrand",     "name": "Flamebrand",            "slot": "weapon",  "cost": 420,  "rarity": "rare",     "bonuses": { "atk": 3, "hp": 2 } },
+    { "id": "starfall_edge",  "name": "Starfall Edge",         "slot": "weapon",  "cost": 1000, "rarity": "epic",     "bonuses": { "atk": 5, "hp": 4 } },
+    { "id": "chain_shirt",    "name": "Chain Shirt",           "slot": "armor",   "cost": 160,  "rarity": "uncommon", "bonuses": { "ac": 2 } },
+    { "id": "dragonhide",     "name": "Dragonhide Cloak",      "slot": "armor",   "cost": 420,  "rarity": "rare",     "bonuses": { "ac": 3, "hp": 2 } },
+    { "id": "aegis_colossus", "name": "Aegis of the Colossus", "slot": "armor",   "cost": 1000, "rarity": "epic",     "bonuses": { "ac": 4, "hp": 6 } },
+    { "id": "giants_belt",    "name": "Giant's Belt",          "slot": "trinket", "cost": 180,  "rarity": "uncommon", "bonuses": { "str": 2, "hp": 4 } },
+    { "id": "cat_charm",      "name": "Cat Charm",             "slot": "trinket", "cost": 180,  "rarity": "uncommon", "bonuses": { "dex": 2, "ac": 1 } },
+    { "id": "phoenix_plume",  "name": "Phoenix Plume",         "slot": "trinket", "cost": 450,  "rarity": "rare",     "bonuses": { "hp": 8 } },
+    { "id": "crown_of_ages",  "name": "Crown of Ages",         "slot": "trinket", "cost": 1100, "rarity": "epic",     "bonuses": { "atk": 2, "ac": 2, "hp": 4 } },
+    { "id": "healing_potion", "name": "Healing Potion",        "slot": "potion",  "cost": 40,   "rarity": "common",   "consumable": true }
+  ]
+}

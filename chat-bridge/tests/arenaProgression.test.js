@@ -206,10 +206,10 @@ describe('ArenaProgression — shop, buy, equip', () => {
     const { progression, twitch } = makeProgression({ chat_participant_arena_load: { found: false } });
     const { sheet } = await progression.getSheet('rich');
     sheet.gold = 500;
-    await progression.handleCommand(CH, 'rich', 'Rich', 'buy', ['Rusty', 'Blade']);
-    expect(sheet.gold).toBe(475);
-    expect(sheet.items.map(i => i.id)).toContain('rusty_blade');
-    expect(sheet.equipped.weapon).toBe('rusty_blade');
+    await progression.handleCommand(CH, 'rich', 'Rich', 'buy', ['Steel', 'Sword']);
+    expect(sheet.gold).toBe(340);
+    expect(sheet.items.map(i => i.id)).toContain('steel_sword');
+    expect(sheet.equipped.weapon).toBe('steel_sword');
     expect(allMessages(twitch)).toContain('equipped');
   });
 
@@ -217,24 +217,24 @@ describe('ArenaProgression — shop, buy, equip', () => {
     const { progression, twitch } = makeProgression({ chat_participant_arena_load: { found: false } });
     const { sheet } = await progression.getSheet('gearhead');
     sheet.gold = 1000;
-    await progression.handleCommand(CH, 'gearhead', 'G', 'buy', ['rusty_blade']);
-    await progression.handleCommand(CH, 'gearhead', 'G', 'buy', ['steel']);
-    // steel sword was bought second — weapon slot already filled by rusty blade
-    expect(sheet.equipped.weapon).toBe('rusty_blade');
-    await progression.handleCommand(CH, 'gearhead', 'G', 'equip', ['steel']);
+    await progression.handleCommand(CH, 'gearhead', 'G', 'buy', ['steel_sword']);
+    await progression.handleCommand(CH, 'gearhead', 'G', 'buy', ['flamebrand']);
+    // flamebrand was bought second — weapon slot already filled by steel sword
     expect(sheet.equipped.weapon).toBe('steel_sword');
-    expect(allMessages(twitch)).toContain('Equipped Steel Sword');
+    await progression.handleCommand(CH, 'gearhead', 'G', 'equip', ['flame']);
+    expect(sheet.equipped.weapon).toBe('flamebrand');
+    expect(allMessages(twitch)).toContain('Equipped Flamebrand');
   });
 
   test('!bag lists owned items and marks equipped gear', async () => {
     const { progression, twitch } = makeProgression({ chat_participant_arena_load: { found: false } });
     const { sheet } = await progression.getSheet('hoarder');
     sheet.gold = 500;
-    await progression.handleCommand(CH, 'hoarder', 'H', 'buy', ['iron', 'ring']);
+    await progression.handleCommand(CH, 'hoarder', 'H', 'buy', ['cat', 'charm']);
     twitch.replied.length = 0;
     await progression.handleCommand(CH, 'hoarder', 'H', 'bag', []);
     const msg = twitch.replied[0].msg;
-    expect(msg).toContain('Iron Ring✦');
+    expect(msg).toContain('Cat Charm✦');
     expect(msg).toContain('equipped');
   });
 

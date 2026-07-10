@@ -39,20 +39,28 @@ const CLASSES = {
 };
 const CLASS_NAMES = Object.keys(CLASSES);
 
-// Arena shop. Bonuses: atk/ac/hp are flat combat bonuses; ability keys
-// (str/dex/…) raise the effective ability score while equipped.
+// Arena shop — the GOOD gear (uncommon/rare/epic) plus Healing Potions,
+// priced as a meaningful gold sink. Basic (common) gear is intentionally NOT
+// sold here: it drops (rarely) from quests. Override via config/shop.json.
+// Bonuses: atk/ac/hp are flat combat bonuses; ability keys (str/dex/…) raise
+// the effective ability score while equipped.
 const SHOP_CATALOG = [
-  { id: 'rusty_blade',  name: 'Rusty Blade',      slot: 'weapon',  cost: 25,  rarity: 'common',   bonuses: { atk: 1 } },
-  { id: 'steel_sword',  name: 'Steel Sword',      slot: 'weapon',  cost: 80,  rarity: 'uncommon', bonuses: { atk: 2 } },
-  { id: 'flamebrand',   name: 'Flamebrand',       slot: 'weapon',  cost: 220, rarity: 'rare',     bonuses: { atk: 3, hp: 2 } },
-  { id: 'padded_vest',  name: 'Padded Vest',      slot: 'armor',   cost: 25,  rarity: 'common',   bonuses: { ac: 1 } },
-  { id: 'chain_shirt',  name: 'Chain Shirt',      slot: 'armor',   cost: 80,  rarity: 'uncommon', bonuses: { ac: 2 } },
-  { id: 'dragonhide',   name: 'Dragonhide Cloak', slot: 'armor',   cost: 220, rarity: 'rare',     bonuses: { ac: 3, hp: 2 } },
-  { id: 'lucky_coin',   name: 'Lucky Coin',       slot: 'trinket', cost: 40,  rarity: 'common',   bonuses: { hp: 3 } },
-  { id: 'iron_ring',    name: 'Iron Ring',        slot: 'trinket', cost: 40,  rarity: 'common',   bonuses: { ac: 1 } },
-  { id: 'giants_belt',  name: "Giant's Belt",     slot: 'trinket', cost: 150, rarity: 'uncommon', bonuses: { str: 2, hp: 4 } },
-  { id: 'cat_charm',    name: 'Cat Charm',        slot: 'trinket', cost: 150, rarity: 'uncommon', bonuses: { dex: 2, ac: 1 } },
+  { id: 'steel_sword',    name: 'Steel Sword',          slot: 'weapon',  cost: 160,  rarity: 'uncommon', bonuses: { atk: 2 } },
+  { id: 'flamebrand',     name: 'Flamebrand',           slot: 'weapon',  cost: 420,  rarity: 'rare',     bonuses: { atk: 3, hp: 2 } },
+  { id: 'starfall_edge',  name: 'Starfall Edge',        slot: 'weapon',  cost: 1000, rarity: 'epic',     bonuses: { atk: 5, hp: 4 } },
+  { id: 'chain_shirt',    name: 'Chain Shirt',          slot: 'armor',   cost: 160,  rarity: 'uncommon', bonuses: { ac: 2 } },
+  { id: 'dragonhide',     name: 'Dragonhide Cloak',     slot: 'armor',   cost: 420,  rarity: 'rare',     bonuses: { ac: 3, hp: 2 } },
+  { id: 'aegis_colossus', name: 'Aegis of the Colossus', slot: 'armor',  cost: 1000, rarity: 'epic',     bonuses: { ac: 4, hp: 6 } },
+  { id: 'giants_belt',    name: "Giant's Belt",         slot: 'trinket', cost: 180,  rarity: 'uncommon', bonuses: { str: 2, hp: 4 } },
+  { id: 'cat_charm',      name: 'Cat Charm',            slot: 'trinket', cost: 180,  rarity: 'uncommon', bonuses: { dex: 2, ac: 1 } },
+  { id: 'phoenix_plume',  name: 'Phoenix Plume',        slot: 'trinket', cost: 450,  rarity: 'rare',     bonuses: { hp: 8 } },
+  { id: 'crown_of_ages',  name: 'Crown of Ages',        slot: 'trinket', cost: 1100, rarity: 'epic',     bonuses: { atk: 2, ac: 2, hp: 4 } },
+  // Consumable: cures quest injuries between duels (!heal); with the DM's
+  // auto_potion toggle on, also auto-drinks on a death-blow in duels.
+  { id: 'healing_potion', name: 'Healing Potion',       slot: 'potion',  cost: 40,   rarity: 'common',   consumable: true },
 ];
+
+const MAX_POTIONS = 10;
 
 const XP_WIN = 60;
 const XP_LOSS = 20;
@@ -82,13 +90,21 @@ class ArenaProgression {
    * @param {object} opts.twitchClient — { say, reply }
    * @param {object} [opts.logger]
    */
-  constructor({ gameClient, twitchClient, logger }) {
+  constructor({ gameClient, twitchClient, logger, shopCatalog, legacyConfig }) {
     this._game = gameClient;
     this._twitch = twitchClient;
     this._logger = logger || console;
     this._sheets = new Map();      // username → sheet (cache of server state)
     this._loading = new Map();     // username → Promise (de-dupe concurrent loads)
+    this._shop = Array.isArray(shopCatalog) && shopCatalog.length ? shopCatalog : SHOP_CATALOG;
+    // Optional permadeath "legacy bonus" (default off = pure permadeath):
+    // { gold_percent: 0-100, heirloom: bool }
+    this._legacy = { gold_percent: 0, heirloom: false, ...(legacyConfig || {}) };
+    this._quests = null;           // QuestManager, attached by index.js
   }
+
+  /** Attach the QuestManager (owns !quest/!graveyard + lazy resolution). */
+  attachQuests(questManager) { this._quests = questManager; }
 
   // ── Character sheet lifecycle ───────────────────────────────────────────────
 
@@ -113,6 +129,8 @@ class ArenaProgression {
       items: [],
       equipped: { weapon: null, armor: null, trinket: null },
       pending_stat_points: 0,
+      injuries: 0,   // HP deficit carried into duels until healed (!heal)
+      potions: 0,    // Healing Potions held (bought in the shop)
       created_at: Date.now(),
     };
   }
@@ -135,8 +153,26 @@ class ArenaProgression {
         const result = await this._game.send('chat_participant_arena_load', {
           twitch_username: username,
         });
-        if (result?.found && result.arena_character && result.arena_character.class) {
-          sheet = this._normalizeLoaded(result.arena_character);
+        const raw = result?.found ? result.arena_character : null;
+        if (raw?.dead) {
+          // Permadeath tombstone — the chatter must be reborn via !stats.
+          sheet = {
+            dead: true,
+            death_cause: String(raw.death_cause || ''),
+            died_at: Number(raw.died_at) || 0,
+            legacy_gold: Math.max(0, parseInt(raw.legacy_gold, 10) || 0),
+            heirloom: raw.heirloom && raw.heirloom.name ? raw.heirloom : null,
+          };
+        } else if (raw?.class) {
+          sheet = this._normalizeLoaded(raw);
+          // Quest timestamps are server-owned; convert the server-computed
+          // remaining seconds into a local deadline for busy checks/countdowns.
+          if (raw.quest && typeof raw.quest === 'object') {
+            const remainingMs = Math.max(0, Number(result.quest_remaining_s) || 0) * 1000;
+            sheet.quest = { ...raw.quest, local_ends_at: Date.now() + remainingMs };
+          }
+          const cooldownS = Math.max(0, Number(result.quest_cooldown_remaining_s) || 0);
+          if (cooldownS > 0) sheet.quest_cooldown_local = Date.now() + cooldownS * 1000;
         }
       } catch (err) {
         this._logger.error('[ArenaProgression] load error:', err);
@@ -149,11 +185,40 @@ class ArenaProgression {
       }
       this._sheets.set(username, sheet);
       if (isNew) await this._sync(username);
+      // Loaded mid-quest (e.g. after a bridge restart) — let the quest
+      // manager re-arm its return timer / resolve an overdue quest.
+      if (sheet.quest && this._quests) this._quests.scheduleFromSheet(username, sheet);
       return { sheet, isNew };
     })().finally(() => this._loading.delete(username));
 
     this._loading.set(username, promise);
     return promise;
+  }
+
+  /** Cached sheet only — never triggers a server load or creation. */
+  peekSheet(username) {
+    return this._sheets.get(username) || null;
+  }
+
+  /**
+   * Load a sheet from the server WITHOUT creating one when none exists.
+   * Used to check duel targets who may never have played. Returns null
+   * when the chatter has no character.
+   */
+  async loadSheetIfExists(username) {
+    if (this._sheets.has(username)) return this._sheets.get(username);
+    try {
+      const result = await this._game.send('chat_participant_arena_load', {
+        twitch_username: username,
+      });
+      if (!result?.found || !result.arena_character) return null;
+    } catch (err) {
+      this._logger.error('[ArenaProgression] loadSheetIfExists error:', err);
+      return null;
+    }
+    // A record exists — run the full (cached, de-duped) load path.
+    const { sheet } = await this.getSheet(username);
+    return sheet;
   }
 
   /** Coerce a server-restored sheet into the working shape. */
@@ -184,6 +249,8 @@ class ArenaProgression {
       }
     }
     sheet.pending_stat_points = Math.max(0, parseInt(raw.pending_stat_points, 10) || 0);
+    sheet.injuries = Math.max(0, parseInt(raw.injuries, 10) || 0);
+    sheet.potions = Math.max(0, parseInt(raw.potions, 10) || 0);
     sheet.created_at = parseInt(raw.created_at, 10) || Date.now();
     return sheet;
   }
@@ -192,6 +259,8 @@ class ArenaProgression {
     const sheet = this._sheets.get(username);
     if (!sheet) return;
     try {
+      // quest / local_* fields are server-owned or bridge-local: the server
+      // strips them on sync, so the sheet can be sent as-is.
       await this._game.send('chat_participant_arena_sync', {
         twitch_username: username,
         arena_character: sheet,
@@ -199,6 +268,54 @@ class ArenaProgression {
     } catch (err) {
       this._logger.error('[ArenaProgression] sync error:', err);
     }
+  }
+
+  /** Public sync — used by the QuestManager after applying quest outcomes. */
+  async sync(username) { return this._sync(username); }
+
+  // ── Availability (permadeath + questing busy-state) ─────────────────────────
+
+  isDead(sheet) { return !!(sheet && sheet.dead); }
+
+  /** Milliseconds until the cached sheet's quest ends (0 = not questing). */
+  questRemainingMs(sheet) {
+    const q = sheet && sheet.quest;
+    if (!q || !q.local_ends_at) return 0;
+    return Math.max(0, q.local_ends_at - Date.now());
+  }
+
+  /**
+   * Can this chatter start/accept a duel right now?
+   * Returns { ok } or { ok:false, reason: 'dead'|'questing', remainingMs }.
+   * With createIfMissing=false, chatters with no character are eligible
+   * (their sheet is created when the duel actually starts) — used for duel
+   * targets so a mistyped name never creates a phantom character.
+   */
+  async duelEligibility(username, { createIfMissing = true } = {}) {
+    let sheet = this._sheets.get(username) || null;
+    if (!sheet) {
+      sheet = createIfMissing
+        ? (await this.getSheet(username)).sheet
+        : await this.loadSheetIfExists(username);
+    }
+    if (!sheet) return { ok: true };
+    if (this.isDead(sheet)) return { ok: false, reason: 'dead' };
+    const remainingMs = this.questRemainingMs(sheet);
+    if (remainingMs > 0) return { ok: false, reason: 'questing', remainingMs };
+    return { ok: true };
+  }
+
+  /** Consume Healing Potions after a duel auto-use; syncs the sheet. */
+  async consumePotions(username, count = 1) {
+    const sheet = this._sheets.get(username);
+    if (!sheet || sheet.dead) return;
+    sheet.potions = Math.max(0, (sheet.potions || 0) - count);
+    await this._sync(username);
+  }
+
+  _deadReply(channel, username) {
+    this._twitch.reply(channel, username,
+      'You are dead! 💀 Type !stats (or !rebirth) to roll a new hero.');
   }
 
   // ── Derived stats ───────────────────────────────────────────────────────────
@@ -244,10 +361,21 @@ class ArenaProgression {
     };
   }
 
-  /** Async convenience for the arena: load sheet then derive combat stats. */
+  /** Async convenience for the arena: load sheet then derive combat stats.
+   * startHp reflects unhealed quest injuries; potions feed the optional
+   * auto-potion death-blow save. */
   async combatStatsFor(username) {
     const { sheet } = await this.getSheet(username);
-    return this.combatStats(sheet);
+    if (sheet.dead) {
+      // Shouldn't happen (arena gates dead fighters) — fail safe with base stats.
+      return { maxHp: 20, ac: 12, atkBonus: 0, startHp: 20, potions: 0 };
+    }
+    const combat = this.combatStats(sheet);
+    return {
+      ...combat,
+      startHp: Math.max(1, combat.maxHp - (sheet.injuries || 0)),
+      potions: sheet.potions || 0,
+    };
   }
 
   // ── Duel results (called by arena.js when a duel finishes) ──────────────────
@@ -286,17 +414,51 @@ class ArenaProgression {
 
   /**
    * Entry point from commandParser.
-   * @param {string} action — 'stats'|'bag'|'equip'|'shop'|'buy'|'levelup'|'leaderboard'
+   * @param {string} action — 'stats'|'bag'|'equip'|'shop'|'buy'|'levelup'|
+   *                          'leaderboard'|'heal'|'rebirth'|'quest'|'graveyard'
    */
   async handleCommand(channel, username, displayName, action, args) {
     try {
+      // Quest board + graveyard live in the QuestManager.
+      if (action === 'quest' || action === 'graveyard') {
+        if (this._quests) await this._quests.handleCommand(channel, username, displayName, action, args);
+        return;
+      }
+
+      // Lazy quest resolution: an overdue quest resolves (and announces its
+      // return) before the command runs, so state is never stale.
+      if (this._quests) await this._quests.maybeResolve(channel, username);
+
+      // Permadeath gate: dead chatters can only look at the leaderboard or
+      // be reborn — everything else points them to !stats.
+      if (action !== 'leaderboard') {
+        const { sheet, isNew } = await this.getSheet(username);
+        if (isNew) this._announceNewCharacter(channel, username, sheet);
+        if (sheet.dead && action !== 'stats' && action !== 'rebirth') {
+          this._deadReply(channel, username);
+          return;
+        }
+        // Questing heroes took their satchel with them — no potion use while away.
+        if (action === 'heal') {
+          const remainingMs = this.questRemainingMs(sheet);
+          if (remainingMs > 0) {
+            const mins = Math.max(1, Math.ceil(remainingMs / 60000));
+            this._twitch.reply(channel, username,
+              `You're off questing (returns in ${mins}m) — no potions until you're back.`);
+            return;
+          }
+        }
+      }
+
       switch (action) {
-        case 'stats':       await this._handleStats(channel, username, displayName); break;
+        case 'stats':
+        case 'rebirth':     await this._handleStats(channel, username, displayName, action === 'rebirth'); break;
         case 'bag':         await this._handleBag(channel, username, displayName); break;
         case 'equip':       await this._handleEquip(channel, username, displayName, args); break;
         case 'shop':        this._handleShop(channel, username); break;
         case 'buy':         await this._handleBuy(channel, username, displayName, args); break;
         case 'levelup':     await this._handleLevelup(channel, username, displayName); break;
+        case 'heal':        await this._handleHeal(channel, username, displayName); break;
         case 'leaderboard': await this._handleLeaderboard(channel, username); break;
         default: break;
       }
@@ -305,9 +467,19 @@ class ArenaProgression {
     }
   }
 
-  async _handleStats(channel, username, displayName) {
-    const { sheet, isNew } = await this.getSheet(username);
-    if (isNew) this._announceNewCharacter(channel, username, sheet);
+  async _handleStats(channel, username, displayName, explicitRebirth = false) {
+    let { sheet } = await this.getSheet(username);
+
+    if (sheet.dead) {
+      // REBIRTH: the dead chatter's !stats (or !rebirth) rolls a fresh hero.
+      sheet = await this._rebirth(channel, username, sheet);
+      return;
+    }
+    if (explicitRebirth) {
+      this._twitch.reply(channel, username,
+        `You're alive and well — !rebirth only works from beyond the grave. See !stats.`);
+      return;
+    }
 
     const eff = this.effectiveAbilities(sheet);
     const combat = this.combatStats(sheet);
@@ -318,10 +490,63 @@ class ArenaProgression {
       return total !== base ? `${label} ${total} (${base}+${total - base})` : `${label} ${total}`;
     }).join(' ');
 
+    const injured = (sheet.injuries || 0) > 0
+      ? ` | 🩸 wounded -${Math.min(sheet.injuries, combat.maxHp - 1)} HP (!heal)` : '';
+    const potions = (sheet.potions || 0) > 0 ? ` | 🧪 x${sheet.potions}` : '';
     this._twitch.reply(channel, username,
       `${sheet.class} L${sheet.level} — ${abilityStr} | HP ${combat.maxHp} AC ${combat.ac} ATK +${combat.atkBonus} | ` +
-      `XP ${sheet.xp}/${xpForNextLevel(sheet.level)} | ${sheet.gold} gold | ${sheet.wins}W/${sheet.losses}L`
+      `XP ${sheet.xp}/${xpForNextLevel(sheet.level)} | ${sheet.gold} gold | ${sheet.wins}W/${sheet.losses}L${injured}${potions}`
     );
+  }
+
+  /** Roll a brand-new character for a dead chatter, applying any configured
+   * legacy bonus from the tombstone. Announced like a first join. */
+  async _rebirth(channel, username, tombstone) {
+    const sheet = this.createCharacter();
+    const perks = [];
+    const legacyGold = Math.max(0, parseInt(tombstone.legacy_gold, 10) || 0);
+    if (legacyGold > 0) {
+      sheet.gold += legacyGold;
+      perks.push(`${legacyGold}g inherited`);
+    }
+    const heirloom = tombstone.heirloom;
+    if (heirloom && heirloom.name) {
+      sheet.items.push({ ...heirloom });
+      const slot = ['weapon', 'armor', 'trinket'].includes(heirloom.slot) ? heirloom.slot : 'trinket';
+      if (!sheet.equipped[slot]) sheet.equipped[slot] = heirloom.id || heirloom.name;
+      perks.push(`heirloom: ${heirloom.name}`);
+    }
+    this._sheets.set(username, sheet);
+    await this._sync(username);
+
+    const a = sheet.abilities;
+    const legacyNote = perks.length ? ` (${perks.join(', ')})` : '';
+    this._twitch.say(channel,
+      `⚰️✨ ${mention(username)} is REBORN as a ${sheet.class}! ` +
+      `STR ${a.str} DEX ${a.dex} CON ${a.con} INT ${a.int} WIS ${a.wis} CHA ${a.cha} — ` +
+      `${sheet.gold} starting gold${legacyNote}. A new legend begins!`);
+    return sheet;
+  }
+
+  async _handleHeal(channel, username, displayName) {
+    const { sheet } = await this.getSheet(username);
+    if ((sheet.potions || 0) <= 0) {
+      this._twitch.reply(channel, username,
+        `No Healing Potions in your satchel — grab one in the !shop.`);
+      return;
+    }
+    if ((sheet.injuries || 0) <= 0) {
+      this._twitch.reply(channel, username,
+        `You're unhurt — save the potion for when a quest goes wrong. (🧪 x${sheet.potions})`);
+      return;
+    }
+    sheet.potions -= 1;
+    const cured = sheet.injuries;
+    sheet.injuries = 0;
+    await this._sync(username);
+    const combat = this.combatStats(sheet);
+    this._twitch.reply(channel, username,
+      `🧪 You drink a Healing Potion — wounds cured (+${cured} HP, back to ${combat.maxHp}). ${sheet.potions} left.`);
   }
 
   async _handleBag(channel, username, displayName) {
@@ -365,12 +590,15 @@ class ArenaProgression {
   }
 
   _handleShop(channel, username) {
-    const list = SHOP_CATALOG.map(i => {
-      const bonuses = Object.entries(i.bonuses)
-        .map(([k, v]) => `${k.length <= 3 ? k.toUpperCase() : k}+${v}`).join('/');
-      return `${i.name} ${i.cost}g (${bonuses})`;
+    const list = this._shop.map(i => {
+      const desc = i.consumable
+        ? 'cures wounds'
+        : Object.entries(i.bonuses || {})
+            .map(([k, v]) => `${k.length <= 3 ? k.toUpperCase() : k}+${v}`).join('/');
+      return `${i.name} ${i.cost}g [${i.rarity}] (${desc})`;
     }).join(', ');
-    this._twitch.reply(channel, username, `Arena shop: ${list} — !buy <item>`);
+    this._twitch.reply(channel, username,
+      `Arena shop: ${list} — !buy <item>. Basic gear? Go questing (!quest).`);
   }
 
   async _handleBuy(channel, username, displayName, args) {
@@ -382,11 +610,31 @@ class ArenaProgression {
     const { sheet, isNew } = await this.getSheet(username);
     if (isNew) this._announceNewCharacter(channel, username, sheet);
 
-    const entry = SHOP_CATALOG.find(i => i.name.toLowerCase().includes(query) || i.id === query);
+    const entry = this._shop.find(i => i.name.toLowerCase().includes(query) || i.id === query);
     if (!entry) {
       this._twitch.reply(channel, username, `The shop doesn't sell '${args.join(' ')}'. See !shop.`);
       return;
     }
+
+    if (entry.consumable) {
+      // Healing Potions stack (up to MAX_POTIONS) instead of entering the bag.
+      if ((sheet.potions || 0) >= MAX_POTIONS) {
+        this._twitch.reply(channel, username, `You can't carry more than ${MAX_POTIONS} potions.`);
+        return;
+      }
+      if (sheet.gold < entry.cost) {
+        this._twitch.reply(channel, username,
+          `${entry.name} costs ${entry.cost} gold — you have ${sheet.gold}. Quests and duels pay gold!`);
+        return;
+      }
+      sheet.gold -= entry.cost;
+      sheet.potions = (sheet.potions || 0) + 1;
+      await this._sync(username);
+      this._twitch.reply(channel, username,
+        `Bought ${entry.name} (🧪 x${sheet.potions}) — !heal to cure wounds. ${sheet.gold} gold left.`);
+      return;
+    }
+
     if ((sheet.items || []).some(i => i.id === entry.id)) {
       this._twitch.reply(channel, username, `You already own ${entry.name}. !equip ${entry.name} to use it.`);
       return;
@@ -463,6 +711,11 @@ class ArenaProgression {
     this._twitch.say(channel, `🏆 Arena leaderboard: ${list}`);
   }
 
+  /** Public for the QuestManager (announces first-roll characters). */
+  announceNewCharacter(channel, username, sheet) {
+    this._announceNewCharacter(channel, username, sheet);
+  }
+
   _announceNewCharacter(channel, username, sheet) {
     const a = sheet.abilities;
     this._twitch.say(channel,
@@ -476,6 +729,7 @@ module.exports = {
   CLASSES,
   ABILITIES,
   SHOP_CATALOG,
+  MAX_POTIONS,
   xpForNextLevel,
   rollAbilityScore,
   abilityMod,

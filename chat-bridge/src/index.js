@@ -15,6 +15,7 @@ const { EventSubClient } = require('./eventSubClient');
 const { sanitize, validateUsername } = require('./sanitizer');
 const { Arena }         = require('./arena');
 const { ArenaProgression } = require('./arenaProgression');
+const { QuestManager }  = require('./quests');
 const { MockTwitchClient, MockEventSubClient, startMockRepl } = require('./mockChat');
 
 // ---------------------------------------------------------------------------
@@ -46,11 +47,17 @@ const commandMap = loadJson('config/commands.json')  ?? {
   '!vote': 'vote', '!name': 'name', '!me': 'me', '!character': 'me',
   '!stats': 'stats', '!sheet': 'stats', '!equip': 'equip', '!shop': 'shop',
   '!buy': 'buy', '!levelup': 'levelup', '!leaderboard': 'leaderboard',
+  '!quest': 'quest', '!heal': 'heal', '!rebirth': 'rebirth', '!graveyard': 'graveyard',
   '!duel': 'arena', '!accept': 'arena', '!decline': 'arena',
 };
 const lootTables = loadJson('config/loot-tables.json') ?? {};
 const cooldowns  = loadJson('config/cooldowns.json')   ?? {};
 const responses  = loadJson('config/responses.json')   ?? {};
+// Quest definitions, drop tables, flavor pools, permadeath/legacy + potion
+// toggles — themeable per campaign. Merged over DEFAULT_QUEST_CONFIG.
+const questConfig = loadJson('config/quests.json')     ?? {};
+// Optional arena shop override (array of catalog entries).
+const shopConfig  = loadJson('config/shop.json');
 
 // ---------------------------------------------------------------------------
 // Env validation
@@ -142,6 +149,12 @@ const rateLimiter = new RateLimiter({
     buy:         cooldowns.buy_seconds         ?? 5,
     levelup:     cooldowns.levelup_seconds     ?? 10,
     leaderboard: cooldowns.leaderboard_seconds ?? 30,
+    // Low: "!quest" (list) then "!quest <n>" (start) is the normal flow.
+    // Real pacing is enforced server-side (one active quest + return cooldown).
+    quest:       cooldowns.quest_seconds       ?? 3,
+    heal:        cooldowns.heal_seconds        ?? 5,
+    rebirth:     cooldowns.rebirth_seconds     ?? 10,
+    graveyard:   cooldowns.graveyard_seconds   ?? 30,
     unknown_cmd: cooldowns.unknown_cmd_seconds ?? 60,
     ...(cooldowns.commands ?? {}),
   },
@@ -247,6 +260,7 @@ let commandParser = null;
 let eventSubClient = null;
 let arena = null;
 let progression = null;
+let questManager = null;
 
 async function main() {
   logger.info('[ChatBridge] Starting Twitch Chat Bridge…');
@@ -307,7 +321,23 @@ async function main() {
 
   const channel = `#${twitchChannel.replace(/^#/, '')}`;
 
-  progression = new ArenaProgression({ gameClient, twitchClient, logger });
+  progression = new ArenaProgression({
+    gameClient,
+    twitchClient,
+    logger,
+    shopCatalog: Array.isArray(shopConfig) ? shopConfig : shopConfig?.catalog,
+    legacyConfig: questConfig?.legacy,
+  });
+
+  questManager = new QuestManager({
+    gameClient,
+    twitchClient,
+    progression,
+    config: questConfig,
+    channel,
+    logger,
+  });
+  progression.attachQuests(questManager);
 
   arena = new Arena({
     twitchClient,
@@ -315,6 +345,8 @@ async function main() {
     config: {
       duel_cooldown_seconds: cooldowns.duel_cooldown_seconds ?? 120,
       interactiveMode: false,
+      // Auto-drink a held Healing Potion on a death-blow (default off).
+      autoPotion: !!questConfig?.auto_potion,
     },
     logger,
     // Map a chatter-typed opponent reference (login, display name, or !name
@@ -347,6 +379,10 @@ async function main() {
   });
 
   twitchClient.onMessage((ch, tags, message) => commandParser.handle(ch, tags, message));
+
+  // Quests survive bridge restarts: the server holds every in-flight quest's
+  // (server-clock) deadline — re-arm the return-announcement timers from it.
+  await questManager.resume();
 
   // DM-configured reward tables: fetch now, refresh whenever the DM saves
   // changes in the Stream panel.
@@ -485,12 +521,17 @@ async function main() {
   }
 
   // Handle server-side kill-switch events
-  gameClient.on('chat_bridge_status', ({ paused, arena_enabled }) => {
+  gameClient.on('chat_bridge_status', ({ paused, arena_enabled, arena_quiet }) => {
     logger.info(`[ChatBridge] Kill switch: bridge is now ${paused ? 'PAUSED' : 'ACTIVE'}`);
     if (paused && twitchClient) {
       twitchClient.say(channel, 'Chat bridge is temporarily paused by the DM. Hang tight!');
     }
     if (arena_enabled !== undefined) arena.setEnabled(arena_enabled);
+    // Quiet mode queues duels AND quest-return announcements until it lifts.
+    if (arena_quiet !== undefined) {
+      arena.setQuietMode(arena_quiet);
+      questManager.setQuiet(arena_quiet);
+    }
   });
 
   process.on('SIGTERM', shutdown);
@@ -501,6 +542,7 @@ function shutdown() {
   logger.info('[ChatBridge] Shutting down…');
   if (twitchClient) twitchClient.disconnect();
   if (arena) arena.destroy();
+  if (questManager) questManager.destroy();
   gameClient.stop();
   if (eventSubClient) eventSubClient.stop();
   process.exit(0);

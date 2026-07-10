@@ -56,14 +56,21 @@ const ACTION_USAGE = [
   ['shop',        ''],
   ['buy',         '<item>'],
   ['levelup',     ''],
+  ['quest',       '<n>'],
+  ['heal',        ''],
+  ['rebirth',     ''],
   ['leaderboard', ''],
+  ['graveyard',   ''],
   ['vote',        '<n>'],
   ['name',        '<name>'],
   ['me',          ''],
   ['help',        ''],
 ];
 
-const PROGRESSION_ACTIONS = new Set(['stats', 'bag', 'equip', 'shop', 'buy', 'levelup', 'leaderboard']);
+const PROGRESSION_ACTIONS = new Set([
+  'stats', 'bag', 'equip', 'shop', 'buy', 'levelup', 'leaderboard',
+  'quest', 'heal', 'rebirth', 'graveyard',
+]);
 
 /**
  * Parse and dispatch Twitch chat commands.
