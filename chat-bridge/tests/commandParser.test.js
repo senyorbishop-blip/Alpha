@@ -116,6 +116,42 @@ describe('CommandParser — !target', () => {
   });
 });
 
+describe('CommandParser — @-mention normalization', () => {
+  test('strips a single leading @ from every arg', async () => {
+    const { parser, gameClient } = makeParser({
+      chat_participant_target: { success: true, item_name: 'x', target_name: 'Goblin' },
+    });
+    await parser.handle(CH, TAGS('alice'), '!target @Goblin');
+    expect(gameClient.calls[0].payload.target_name).toBe('Goblin');
+  });
+
+  test('arena commands receive @-stripped args', async () => {
+    const commandMap = { '!duel': 'arena', '!accept': 'arena' };
+    const rateLimiter = new RateLimiter({ default_seconds: 0 });
+    const arenaCalls = [];
+    const parser = new CommandParser({
+      commandMap,
+      rateLimiter,
+      gameClient: makeGameClient(),
+      twitchClient: makeTwitchClient(),
+      arenaHandler: (ch, username, displayName, action, args) => {
+        arenaCalls.push({ action, args });
+      },
+    });
+    await parser.handle(CH, TAGS('alice', 'Alice'), '!duel @PotatoWizard');
+    expect(arenaCalls).toEqual([{ action: 'duel', args: ['PotatoWizard'] }]);
+  });
+
+  test('!use with an @-mentioned target keeps the item name intact', async () => {
+    const { parser, gameClient } = makeParser({
+      chat_participant_target: { success: true, item_name: 'Fireball', target_name: 'PotatoWizard' },
+    });
+    await parser.handle(CH, TAGS('alice'), '!use fireball @PotatoWizard');
+    expect(gameClient.calls[0].payload.item_name).toBe('fireball');
+    expect(gameClient.calls[0].payload.target_name).toBe('PotatoWizard');
+  });
+});
+
 describe('CommandParser — !inventory', () => {
   test('replies with item list when items present', async () => {
     const { parser, twitchClient } = makeParser({

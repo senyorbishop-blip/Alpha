@@ -111,7 +111,10 @@ class CommandParser {
 
     const parts = raw.split(/\s+/);
     const cmdRaw = parts[0].toLowerCase();
-    const args = parts.slice(1);
+    // Twitch @-autocomplete prefixes names with '@' ("!duel @PotatoWizard").
+    // Strip a single leading '@' from every arg so all commands match names
+    // the same way chatters type them.
+    const args = parts.slice(1).map(a => a.replace(/^@/, ''));
 
     const username = validateUsername(tags.username ?? tags['display-name'] ?? '');
     if (!username) return;

@@ -72,6 +72,9 @@ function rollAbilityScore() {
 
 function abilityMod(score) { return Math.floor((score - 10) / 2); }
 
+/** Render a chat mention — never produces '@@' even if the value has an '@'. */
+function mention(name) { return `@${String(name ?? '').replace(/^@+/, '')}`; }
+
 class ArenaProgression {
   /**
    * @param {object} opts
@@ -271,8 +274,8 @@ class ArenaProgression {
 
       const winReady = win.xp >= xpForNextLevel(win.level) ? ' Ready to !levelup!' : '';
       this._twitch.say(channel,
-        `@${winnerUsername} earns ${XP_WIN} XP and ${GOLD_WIN} gold (${win.xp}/${xpForNextLevel(win.level)} XP).${winReady} ` +
-        `@${loserUsername} earns ${XP_LOSS} XP and ${GOLD_LOSS} gold for the effort.`
+        `${mention(winnerUsername)} earns ${XP_WIN} XP and ${GOLD_WIN} gold (${win.xp}/${xpForNextLevel(win.level)} XP).${winReady} ` +
+        `${mention(loserUsername)} earns ${XP_LOSS} XP and ${GOLD_LOSS} gold for the effort.`
       );
     } catch (err) {
       this._logger.error('[ArenaProgression] recordDuelResult error:', err);
@@ -436,7 +439,7 @@ class ArenaProgression {
 
     const combat = this.combatStats(sheet);
     this._twitch.say(channel,
-      `🎉 @${username} is now a Level ${sheet.level} ${sheet.class}! ` +
+      `🎉 ${mention(username)} is now a Level ${sheet.level} ${sheet.class}! ` +
       `+1 ${primary.toUpperCase()}, +1 ${bonus.toUpperCase()} — HP ${combat.maxHp} AC ${combat.ac} ATK +${combat.atkBonus}.`);
   }
 
@@ -463,7 +466,7 @@ class ArenaProgression {
   _announceNewCharacter(channel, username, sheet) {
     const a = sheet.abilities;
     this._twitch.say(channel,
-      `🎲 @${username} rolls a new arena character: ${sheet.class}! ` +
+      `🎲 ${mention(username)} rolls a new arena character: ${sheet.class}! ` +
       `STR ${a.str} DEX ${a.dex} CON ${a.con} INT ${a.int} WIS ${a.wis} CHA ${a.cha} — ${sheet.gold} starting gold.`);
   }
 }

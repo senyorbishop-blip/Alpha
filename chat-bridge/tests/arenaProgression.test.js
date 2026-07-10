@@ -165,6 +165,16 @@ describe('ArenaProgression — XP and !levelup', () => {
     expect(loser.xp).toBeGreaterThan(0);
     expect(allMessages(twitch)).toContain('XP');
   });
+
+  test('duel result announcement mentions both fighters without @@', async () => {
+    const { progression, twitch } = makeProgression({ chat_participant_arena_load: { found: false } });
+    // Defensive: even a stray '@'-prefixed username must not render as '@@'
+    await progression.recordDuelResult('@winna', 'losah', CH);
+    const msg = twitch.said[twitch.said.length - 1].msg;
+    expect(msg).toContain('@winna');
+    expect(msg).toContain('@losah');
+    expect(msg).not.toContain('@@');
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -967,6 +967,72 @@ async def handle_chat_participant_name_set(payload: dict, session: Session, user
 
 
 # ---------------------------------------------------------------------------
+# Participant name resolution  (role: chat_bridge)
+# ---------------------------------------------------------------------------
+
+def _match_participants(session: Session, name_query: str) -> list:
+    """Match a chatter-supplied reference against active participants.
+
+    Matches case-insensitively against Twitch login name, display name, and
+    chosen character name (!name), with a single leading '@' stripped (Twitch
+    @-autocomplete). Tiered so the canonical identifiers always win: an exact
+    login match beats a display-name match, which beats a character-name
+    match — otherwise a chatter who !name'd themselves after someone's login
+    could hijack plain "!duel <login>". Returns the matching participant keys;
+    more than one key means the reference is genuinely ambiguous.
+    """
+    query = re.sub(r"^@", "", str(name_query or "").strip()).lower()
+    if not query:
+        return []
+    login_hits: list = []
+    display_hits: list = []
+    char_hits: list = []
+    for key in session.chat_participants:
+        p = _resolve_participant(session, key)
+        if p is None or not p.is_active:
+            continue
+        if key == query:
+            login_hits.append(key)
+        elif (p.display_name or "").strip().lower() == query:
+            display_hits.append(key)
+        elif (p.character_name or "").strip().lower() == query:
+            char_hits.append(key)
+    return login_hits or display_hits or char_hits
+
+
+async def handle_chat_participant_resolve(payload: dict, session: Session, user: User):
+    """Resolve a chatter-vs-chatter reference (e.g. !duel <name>) to a login.
+
+    Read-only: never mutates participant or campaign state.
+    """
+    raw_name = str(payload.get("name") or "")
+    matches = _match_participants(session, raw_name)
+
+    if len(matches) == 1:
+        p = _resolve_participant(session, matches[0])
+        out = {
+            "found": True,
+            "twitch_username": matches[0],
+            "display_name": p.display_name if p else matches[0],
+            "character_name": p.character_name if p else "",
+        }
+    elif matches:
+        labels = []
+        for key in matches[:8]:
+            p = _resolve_participant(session, key)
+            label = (p.character_name or p.display_name) if p else key
+            labels.append(_sanitize(f"{label} (@{key})" if label and label.lower() != key else f"@{key}"))
+        out = {"found": False, "error_code": "ambiguous", "matches": labels}
+    else:
+        out = {"found": False, "error_code": "not_found"}
+
+    await manager.send_to(session.id, user.id, {
+        "type": "chat_participant_resolve_result",
+        "payload": _echo_req(payload, out),
+    })
+
+
+# ---------------------------------------------------------------------------
 # Character summary query  (role: chat_bridge)
 # ---------------------------------------------------------------------------
 

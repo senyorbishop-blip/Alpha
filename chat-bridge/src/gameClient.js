@@ -22,6 +22,7 @@ const ACK_TYPES = {
   chat_bridge_poll_vote: 'chat_bridge_poll_vote_result',
   chat_participant_name_set: 'chat_participant_name_result',
   chat_participant_me: 'chat_participant_me_result',
+  chat_participant_resolve: 'chat_participant_resolve_result',
   chat_participant_arena_load: 'chat_participant_arena_load_result',
   chat_participant_arena_sync: 'chat_participant_arena_sync_result',
   chat_participant_arena_leaderboard: 'chat_participant_arena_leaderboard_result',

@@ -166,6 +166,8 @@ CHAT_BRIDGE_ALLOWED_MESSAGE_TYPES = frozenset({
     "chat_participant_name_set",
     # Character summary query via !me
     "chat_participant_me",
+    # Opponent name resolution for arena duels (read-only lookup)
+    "chat_participant_resolve",
     # Arena stats sync (duel end — never touches campaign state)
     "chat_participant_arena_stats_update",
     # Arena character persistence (load/save the arena-only sheet)
