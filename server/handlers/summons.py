@@ -24,7 +24,7 @@ from server.character.summon_diagnostics import (
     metrics_snapshot,
     record_failure_metric,
 )
-from server.handlers.common import Session, User, manager, save_campaign_async, _broadcast_token_state_sync, _broadcast_token_event
+from server.handlers.common import Session, User, manager, save_campaign_async, _broadcast_token_state_sync, _broadcast_token_event, _sync_combatant_token_state
 from server.character.summon_state import normalize_summon_state
 from server.handlers.content import _send_char_profiles, _char_profile_bucket_key
 from server.session import create_token, build_token_runtime_payload
@@ -773,6 +773,7 @@ async def handle_summon_action_use(payload: dict, session: Session, user: User):
         damage_applied = total
         current_hp = int(getattr(target_token, "hp", 0) or 0)
         target_token.hp = max(0, current_hp - damage_applied)
+        _sync_combatant_token_state(session, target_token, previous_hp=current_hp)
 
     result_payload = {
         "ok": True,

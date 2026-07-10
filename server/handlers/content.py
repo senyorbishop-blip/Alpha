@@ -7,7 +7,7 @@ import secrets
 import logging
 
 logger = logging.getLogger(__name__)
-from server.session import Session, User, normalize_profile_owner_key, set_assistant_dm_permissions, assistant_dm_has_scope, grant_temp_permission, ACTIVE_PROFILE_ID_KEY_LIMIT, set_player_gold_for_user, _inventory_owner_key, bump_character_hydration_revisions, build_quick_actions_sync_payload
+from server.session import Session, User, normalize_profile_owner_key, set_assistant_dm_permissions, assistant_dm_has_scope, grant_temp_permission, ACTIVE_PROFILE_ID_KEY_LIMIT, set_player_gold_for_user, _inventory_owner_key, bump_character_hydration_revisions, build_quick_actions_sync_payload, _profile_runtime_summary
 from server.character.profile_sanitize import strip_runtime_fields
 from server.character.profile_assets import sanitize_profile_for_websocket
 from server.character.profile_stub import build_char_profile_stub_list, char_profile_revision
@@ -43,6 +43,7 @@ from server.handlers.common import (
     save_campaign_async,
     _safe_int,
     _broadcast_token_state_sync,
+    _sync_combatant_token_state,
     build_live_state_debug_summary,
 )
 from server.handlers.inventory import (
@@ -308,6 +309,43 @@ def _link_owned_tokens_to_profile(session: Session, user: User, profile: dict) -
         character_id = str(profile.get("characterId") or profile.get("character_id") or identity.get("characterId") or identity.get("id") or "").strip()[:120]
         if character_id and getattr(token, "character_id", "") != character_id:
             token.character_id = character_id
+            changed = True
+    return changed
+
+
+def _apply_profile_max_hp_to_linked_tokens(session: Session, profile: dict, *, owner_id: str | None = None) -> bool:
+    """Apply a profile's (possibly edited) max HP to tokens linked to it.
+
+    Sheet edits are authoritative for max HP only — current HP changes solely
+    through game actions, so it is never rewritten here. If the new max drops
+    below the live current HP, current is clamped down to the new max.
+    When *owner_id* is given, only that user's tokens are touched.
+    """
+    if not isinstance(profile, dict):
+        return False
+    profile_id = str(profile.get("id") or "").strip()
+    if not profile_id:
+        return False
+    max_hp = _profile_runtime_summary(profile).get("maxHp")
+    if max_hp is None:
+        return False
+    max_hp = max(1, int(max_hp))
+    changed = False
+    for token in (getattr(session, "tokens", {}) or {}).values():
+        if owner_id is not None and str(getattr(token, "owner_id", "") or "") != str(owner_id):
+            continue
+        if str(getattr(token, "profile_id", "") or "") != profile_id:
+            continue
+        token_changed = False
+        if getattr(token, "max_hp", None) != max_hp:
+            token.max_hp = max_hp
+            token_changed = True
+        current = getattr(token, "hp", None)
+        if current is not None and int(current) > max_hp:
+            token.hp = max_hp
+            token_changed = True
+        if token_changed:
+            _sync_combatant_token_state(session, token)
             changed = True
     return changed
 
@@ -663,6 +701,7 @@ async def handle_char_profile_upsert(payload: dict, session: Session, user: User
     await _send_char_profiles(session, user.id)
     await _broadcast_inventory_state(session)
     _link_owned_tokens_to_profile(session, user, saved_profile)
+    _apply_profile_max_hp_to_linked_tokens(session, saved_profile, owner_id=user.id)
     await _broadcast_token_state_sync(session)
     await save_campaign_async(session)
 
@@ -690,6 +729,7 @@ async def handle_char_profile_select(payload: dict, session: Session, user: User
     await _broadcast_inventory_state(session)
     if selected_profile:
         _link_owned_tokens_to_profile(session, user, selected_profile)
+        _apply_profile_max_hp_to_linked_tokens(session, selected_profile, owner_id=user.id)
     await _broadcast_token_state_sync(session)
     await save_campaign_async(session)
 

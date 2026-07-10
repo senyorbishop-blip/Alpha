@@ -35,7 +35,7 @@ from server.character.resolver import resolve_character_runtime
 from server.character.rules_catalog import get_class_catalog_row, get_species_catalog_row, get_subclass_catalog_row
 from server.character.feature_catalog import build_runtime_feature_payload
 from server.handlers.common import save_campaign_async
-from server.handlers.content import upsert_char_profile_for_owner
+from server.handlers.content import upsert_char_profile_for_owner, _apply_profile_max_hp_to_linked_tokens
 from server.http.auth import auth_display_name, auth_player_key, get_request_user
 from server.http.session_access import get_or_restore_session, resolve_session_authority
 from server.integrations.service import fetch_ddb_character_response, parse_character_pdf_response
@@ -545,6 +545,7 @@ async def _persist_imported_document(*, session_id: str, auth_user: dict, docume
         upsert_payload["nativeCharacter"] = native
         upsert_payload["importMeta"] = native.get("importMeta") if isinstance(native.get("importMeta"), dict) else upsert_payload.get("importMeta", {})
     saved_profile = upsert_char_profile_for_owner(session, owner_key, upsert_payload)
+    _apply_profile_max_hp_to_linked_tokens(session, saved_profile)
     await save_campaign_async(session)
 
     return _normalize_profile_entry(saved_profile if isinstance(saved_profile, dict) else {}, fallback_id="imported")
@@ -1296,6 +1297,7 @@ async def api_character_levelup_apply(request: Request):
         raise HTTPException(status_code=400, detail="Unable to resolve profile owner")
 
     saved_profile = upsert_char_profile_for_owner(session, owner_key, upsert_payload)
+    _apply_profile_max_hp_to_linked_tokens(session, saved_profile)
     await save_campaign_async(session)
 
     summary = _normalize_profile_entry(saved_profile if isinstance(saved_profile, dict) else {}, fallback_id="native")
@@ -1375,6 +1377,7 @@ async def apply_levelup_endpoint(character_id: str, request: Request):
     saved_profile = upsert_char_profile_for_owner(session, owner_key, upsert_payload)
     if profile_index >= 0 and isinstance(saved_profile, dict):
         profile_rows[profile_index] = saved_profile
+    _apply_profile_max_hp_to_linked_tokens(session, saved_profile)
     await save_campaign_async(session)
 
     return JSONResponse(
@@ -1435,6 +1438,7 @@ async def api_character_save(request: Request):
         raise HTTPException(status_code=400, detail="Unable to resolve profile owner")
 
     saved_profile = upsert_char_profile_for_owner(session, owner_key, upsert_payload)
+    _apply_profile_max_hp_to_linked_tokens(session, saved_profile)
     await save_campaign_async(session)
 
     summary = _normalize_profile_entry(saved_profile if isinstance(saved_profile, dict) else {}, fallback_id="native")

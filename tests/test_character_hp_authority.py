@@ -104,10 +104,17 @@ def test_token_hp_update_persists_to_profile_and_rejoin_sync(monkeypatch):
     profile = session.char_profiles[owner_key][0]
     assert profile["nativeRuntime"]["hp"]["current"] == 11
 
-    # Rejoin/claim path should hydrate token HP from persisted profile runtime values.
-    token.hp = 30
+    # Rejoin/claim must never overwrite live token HP: the token is the
+    # runtime authority for current HP; the profile only supplies max HP.
     _sync_player_state_from_profile(session, user, profile)
     assert token.hp == 11
+
+    # Even a stale profile copy (sheet still at full HP) must not undo damage.
+    stale = dict(profile)
+    stale["nativeRuntime"] = {"hp": {"max": 30, "current": 30, "temp": 0}}
+    _sync_player_state_from_profile(session, user, stale)
+    assert token.hp == 11
+    assert token.max_hp == 30
 
     # Rejoin sync now ships stubs — the updated vitals ride the stub scalars,
     # and the full body (with nativeRuntime) is served by char_profile_fetch.

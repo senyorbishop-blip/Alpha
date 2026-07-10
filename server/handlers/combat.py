@@ -23,6 +23,7 @@ from server.handlers.common import (
     _send_action_ack,
     build_live_state_debug_summary,
     _broadcast_token_event,
+    _persist_token_hp_to_owned_profiles,
 )
 from server.movement import resolve_movement, normalize_movement_mode
 from server.handlers.durability import mark_session_dirty
@@ -1302,6 +1303,7 @@ async def handle_combat_death_save(payload: dict, session: Session, user: User):
         token.hp = 1
         current["hp"] = 1
         current.pop("death_saves", None)
+        _persist_token_hp_to_owned_profiles(session, token)
     elif int(death_saves.get("fails", 0) or 0) >= 3:
         dead = True
         death_saves["dead"] = True
