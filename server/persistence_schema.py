@@ -732,6 +732,7 @@ def _serialize_chat_participants(participants: dict, persistence_mode: str = "ev
                     "wins": 0, "losses": 0, "arena_gold": 0,
                 }),
                 "arena_character": dict(getattr(p, "arena_character", None) or {}),
+                "graveyard": list(getattr(p, "graveyard", None) or []),
             }
         elif isinstance(p, dict):
             record = dict(p)

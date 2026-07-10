@@ -175,6 +175,12 @@ CHAT_BRIDGE_ALLOWED_MESSAGE_TYPES = frozenset({
     "chat_participant_arena_sync",
     # Arena leaderboard query (!leaderboard)
     "chat_participant_arena_leaderboard",
+    # Chat quests (server-side timers) + permadeath/graveyard
+    "chat_participant_quest_start",
+    "chat_participant_quest_resolve",
+    "chat_bridge_active_quests",
+    "chat_participant_arena_death",
+    "chat_participant_graveyard",
     # DM-configured reward tables (read-only fetch for sub/gift/bits rolls)
     "chat_bridge_rewards_get",
     # Arena display event relay (broadcast to overlays, no state change)

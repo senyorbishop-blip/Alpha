@@ -15,6 +15,10 @@
   "buy_seconds":      5,
   "levelup_seconds":  10,
   "leaderboard_seconds": 30,
+  "quest_seconds":    3,
+  "heal_seconds":     5,
+  "rebirth_seconds":  10,
+  "graveyard_seconds": 30,
   "unknown_cmd_seconds": 60,
 
   "global_max":             30,

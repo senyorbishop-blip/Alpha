@@ -582,6 +582,9 @@ class ChatParticipant:
     # Full arena progression sheet (class, level, xp, gold, items…) —
     # opaque to the campaign; written only by the arena sync handler.
     arena_character: dict = field(default_factory=dict)
+    # Fallen arena characters (permadeath legacy records): most recent last.
+    # Each entry keeps the dead character's headline stats + death cause.
+    graveyard: list = field(default_factory=list)
 
 
 @dataclass

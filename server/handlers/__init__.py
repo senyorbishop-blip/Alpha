@@ -287,6 +287,11 @@ from server.handlers.chat_bridge import (
     handle_chat_participant_arena_load,
     handle_chat_participant_arena_sync,
     handle_chat_participant_arena_leaderboard,
+    handle_chat_participant_quest_start,
+    handle_chat_participant_quest_resolve,
+    handle_chat_bridge_active_quests,
+    handle_chat_participant_arena_death,
+    handle_chat_participant_graveyard,
     handle_dm_chat_participants_get,
     handle_dm_chat_participant_update,
     handle_dm_chat_participant_reset,
@@ -553,6 +558,12 @@ async def handle_message(raw: dict, session: Session, user: User):
         "chat_participant_arena_load":        handle_chat_participant_arena_load,
         "chat_participant_arena_sync":        handle_chat_participant_arena_sync,
         "chat_participant_arena_leaderboard": handle_chat_participant_arena_leaderboard,
+        # ── Chat quests + permadeath (chat_bridge role, server-side timers) ─
+        "chat_participant_quest_start":   handle_chat_participant_quest_start,
+        "chat_participant_quest_resolve": handle_chat_participant_quest_resolve,
+        "chat_bridge_active_quests":      handle_chat_bridge_active_quests,
+        "chat_participant_arena_death":   handle_chat_participant_arena_death,
+        "chat_participant_graveyard":     handle_chat_participant_graveyard,
         # ── Arena display event relay (chat_bridge role, overlay broadcast) ─
         "arena_display_event": handle_arena_display_event,
     }

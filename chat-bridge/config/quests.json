@@ -1,0 +1,78 @@
+{
+  "_comment": "Chat quests + permadeath tuning. Everything here is themeable per campaign: quest names, durations (stream pacing), reward ranges, drop/injury/death odds, and flavor text pools. Death odds are shown in the !quest listing so death never feels like cheating — keep hard-quest death_chance low (0.05-0.10). quest gear drops are BASIC tier (commons, occasional uncommon); the good gear (uncommon/rare/epic) is shop-only — see shop.json.",
+
+  "quests": [
+    {
+      "id": "rat_cellar",
+      "name": "Rats in the Cellar",
+      "risk": "easy",
+      "duration_minutes": 15,
+      "xp": [15, 30],
+      "gold": [8, 18],
+      "drop_chance": 0.08,
+      "injury_chance": 0.10,
+      "death_chance": 0,
+      "flavor": {
+        "depart": ["The tavernkeeper hands over a lantern and a broom."],
+        "success": ["The cellar is quiet again — mostly."],
+        "injury": ["One of the rats was NOT a rat."],
+        "death": []
+      }
+    },
+    {
+      "id": "goblin_warrens",
+      "name": "The Goblin Warrens",
+      "risk": "medium",
+      "duration_minutes": 45,
+      "xp": [35, 65],
+      "gold": [20, 40],
+      "drop_chance": 0.15,
+      "injury_chance": 0.25,
+      "death_chance": 0,
+      "flavor": {
+        "depart": ["Goblin drums echo from the hills…"],
+        "success": ["The warrens fall silent behind them."],
+        "injury": ["Goblins fight dirty. Very dirty."],
+        "death": []
+      }
+    },
+    {
+      "id": "sunken_crypt",
+      "name": "The Sunken Crypt",
+      "risk": "hard",
+      "duration_minutes": 120,
+      "xp": [80, 140],
+      "gold": [50, 90],
+      "drop_chance": 0.25,
+      "injury_chance": 0.35,
+      "death_chance": 0.07,
+      "flavor": {
+        "depart": ["Locals say nobody who enters the crypt at night returns."],
+        "success": ["Dripping wet and grinning, they climb out of the crypt."],
+        "injury": ["Something in the dark got a piece of them."],
+        "death": [
+          "The crypt claims another name for its walls.",
+          "Only their lantern was found, still burning, at the water's edge."
+        ]
+      }
+    }
+  ],
+
+  "drops": [
+    { "id": "rusty_blade",         "name": "Rusty Blade",         "slot": "weapon",  "rarity": "common",   "bonuses": { "atk": 1 }, "weight": 20 },
+    { "id": "padded_vest",         "name": "Padded Vest",         "slot": "armor",   "rarity": "common",   "bonuses": { "ac": 1 },  "weight": 20 },
+    { "id": "rusty_buckler",       "name": "Rusty Buckler",       "slot": "armor",   "rarity": "common",   "bonuses": { "ac": 1 },  "weight": 14 },
+    { "id": "lucky_coin",          "name": "Lucky Coin",          "slot": "trinket", "rarity": "common",   "bonuses": { "hp": 3 },  "weight": 14 },
+    { "id": "iron_ring",           "name": "Iron Ring",           "slot": "trinket", "rarity": "common",   "bonuses": { "ac": 1 },  "weight": 14 },
+    { "id": "worn_steel_sword",    "name": "Worn Steel Sword",    "slot": "weapon",  "rarity": "uncommon", "bonuses": { "atk": 2 }, "weight": 6 },
+    { "id": "patched_chain_shirt", "name": "Patched Chain Shirt", "slot": "armor",   "rarity": "uncommon", "bonuses": { "ac": 2 },  "weight": 6 }
+  ],
+
+  "quest_cooldown_minutes": 10,
+
+  "injury": { "min_fraction": 0.25, "max_fraction": 0.5 },
+
+  "auto_potion": false,
+
+  "legacy": { "gold_percent": 0, "heirloom": false }
+}

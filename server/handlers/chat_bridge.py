@@ -76,6 +76,7 @@ def _resolve_participant(session: Session, twitch_username: str) -> ChatParticip
             "wins": 0, "losses": 0, "arena_gold": 0,
         }),
         arena_character=dict(raw.get("arena_character", None) or {}),
+        graveyard=list(raw.get("graveyard", None) or []),
     )
 
 
@@ -103,6 +104,36 @@ def _find_participant_key_by_user_id(session: Session, twitch_user_id: str) -> s
 def _kill_switch_check(session: Session) -> bool:
     """Return True if the kill switch is active (bridge interactions paused)."""
     return bool(getattr(session, "chat_bridge_paused", False))
+
+
+def _arena_availability_error(participant: ChatParticipant) -> dict | None:
+    """Dead or away-on-a-quest characters cannot act.
+
+    Returns an error payload fragment (error_code + chat-ready message) or
+    None when the character is available. Times are judged by the SERVER
+    clock — the bridge's clock is never consulted.
+    """
+    char = getattr(participant, "arena_character", None) or {}
+    if not isinstance(char, dict):
+        return None
+    name = participant.character_name or participant.display_name
+    if char.get("dead"):
+        return {
+            "error_code": "dead",
+            "message": f"{name} is dead! Type !stats to be reborn.",
+        }
+    quest = char.get("quest")
+    if isinstance(quest, dict):
+        remaining = int(float(quest.get("ends_at", 0) or 0) - time.time())
+        if remaining > 0:
+            mins = max(1, (remaining + 59) // 60)
+            return {
+                "error_code": "questing",
+                "message": f"{name} is off questing (returns in {mins}m).",
+                "remaining_s": remaining,
+                "quest_name": str(quest.get("name") or "a quest"),
+            }
+    return None
 
 
 def _visible_token_names(session: Session, limit: int = 8) -> list:
@@ -498,6 +529,14 @@ async def handle_chat_participant_target(payload: dict, session: Session, user: 
                 "success": False, "error_code": "not_joined",
                 "message": f"{_sanitize(raw_username)} has not joined — use !join first.",
             }),
+        })
+        return
+
+    availability_err = _arena_availability_error(participant)
+    if availability_err:
+        await manager.send_to(session.id, user.id, {
+            "type": "chat_participant_target_result",
+            "payload": _echo_req(payload, {"success": False, **availability_err}),
         })
         return
 
@@ -1361,7 +1400,7 @@ def _sanitize_arena_character(raw: dict) -> dict | None:
     else:
         equipped = {slot: None for slot in _ARENA_ITEM_SLOTS}
 
-    return {
+    clean = {
         "class": _sanitize(str(raw.get("class") or ""), 20),
         "level": _num("level", 1, 99, 1),
         "xp": _num("xp", 0, 10_000_000),
@@ -1378,7 +1417,25 @@ def _sanitize_arena_character(raw: dict) -> dict | None:
         "equipped": equipped,
         "pending_stat_points": _num("pending_stat_points", 0, 99),
         "created_at": _num("created_at", 0, 4_102_444_800_000),
+        # Quest/permadeath extensions. injuries = HP deficit carried into
+        # duels until healed; potions = held Healing Potions (consumables).
+        "injuries": _num("injuries", 0, 9_999),
+        "potions": _num("potions", 0, 99),
     }
+
+    # Permadeath tombstone: while dead, the sheet is replaced by a marker the
+    # bridge uses to gate commands and drive rebirth. legacy_gold / heirloom
+    # carry the optional "legacy bonus" into the next life.
+    if raw.get("dead"):
+        clean["dead"] = True
+        clean["death_cause"] = _sanitize(str(raw.get("death_cause") or ""), 120)
+        clean["died_at"] = _num("died_at", 0, 4_102_444_800_000)
+        clean["legacy_gold"] = _num("legacy_gold", 0, 10_000_000)
+        heirloom = _sanitize_arena_item(raw.get("heirloom"))
+        if heirloom:
+            clean["heirloom"] = heirloom
+
+    return clean
 
 
 async def handle_chat_participant_arena_load(payload: dict, session: Session, user: User):
@@ -1388,12 +1445,23 @@ async def handle_chat_participant_arena_load(payload: dict, session: Session, us
     participant = _resolve_participant(session, key)
 
     character = dict(getattr(participant, "arena_character", None) or {}) if participant else {}
+
+    # Server-clock countdowns so the bridge never needs to compare its own
+    # clock against persisted epoch timestamps.
+    now = time.time()
+    quest = character.get("quest") if isinstance(character.get("quest"), dict) else None
+    quest_remaining_s = max(0, int(float(quest.get("ends_at", 0) or 0) - now)) if quest else 0
+    cooldown_until = float(character.get("quest_cooldown_until", 0) or 0)
+    cooldown_remaining_s = max(0, int(cooldown_until - now))
+
     await manager.send_to(session.id, user.id, {
         "type": "chat_participant_arena_load_result",
         "payload": _echo_req(payload, {
             "twitch_username": key,
             "found": bool(character),
             "arena_character": character or None,
+            "quest_remaining_s": quest_remaining_s,
+            "quest_cooldown_remaining_s": cooldown_remaining_s,
         }),
     })
 
@@ -1430,6 +1498,16 @@ async def handle_chat_participant_arena_sync(payload: dict, session: Session, us
         session.chat_participants[key] = participant
     else:
         session.chat_participants[key] = participant
+
+    # Quest state and its cooldown are SERVER-owned: they are stamped with the
+    # server clock by the quest_start/quest_resolve handlers and must survive
+    # any sheet sync from the bridge (whose clock is never trusted).
+    prev = dict(getattr(participant, "arena_character", None) or {})
+    for server_field in ("quest", "quest_cooldown_until"):
+        if prev.get(server_field) is not None:
+            clean[server_field] = prev[server_field]
+        else:
+            clean.pop(server_field, None)
 
     participant.arena_character = clean
 
@@ -1480,6 +1558,334 @@ async def handle_chat_participant_arena_leaderboard(payload: dict, session: Sess
     entries.sort(key=lambda e: (-e["wins"], e["losses"], -e["level"]))
     await manager.send_to(session.id, user.id, {
         "type": "chat_participant_arena_leaderboard_result",
+        "payload": _echo_req(payload, {"entries": entries[:limit]}),
+    })
+
+
+# ---------------------------------------------------------------------------
+# Chat quests + permadeath  (role: chat_bridge — arena-only, never campaign)
+#
+# The bridge decides WHAT a quest is (definitions, rewards, flavor all live in
+# its config), but the SERVER owns WHEN: quest start/end timestamps and the
+# post-quest cooldown are stamped with the server clock, persisted inside
+# participant.arena_character, and preserved across arena_sync so the bridge
+# clock (or a bridge restart) can never shorten, lose, or forge a quest.
+# ---------------------------------------------------------------------------
+
+_QUEST_MIN_DURATION_S = 30
+_QUEST_MAX_DURATION_S = 24 * 3600
+_QUEST_MAX_COOLDOWN_S = 24 * 3600
+_GRAVEYARD_MAX = 25
+
+
+def _ensure_participant(session: Session, key: str, display_name: str) -> ChatParticipant:
+    """Resolve a participant, creating an inactive record when none exists
+    (chatters can quest/duel without !join, same as arena_sync)."""
+    participant = _resolve_participant(session, key)
+    if participant is None:
+        participant = ChatParticipant(
+            twitch_username=key,
+            display_name=_sanitize(str(display_name or key)),
+            joined_at=time.time(),
+            is_active=False,
+        )
+    session.chat_participants[key] = participant
+    return participant
+
+
+async def handle_chat_participant_quest_start(payload: dict, session: Session, user: User):
+    """Bridge starts a quest for a chatter. Server stamps start/end times."""
+
+    async def _fail(**out):
+        await manager.send_to(session.id, user.id, {
+            "type": "chat_participant_quest_start_result",
+            "payload": _echo_req(payload, {"success": False, **out}),
+        })
+
+    if _kill_switch_check(session):
+        await _fail(error_code="bridge_paused", message="Chat bridge is paused by the DM.")
+        return
+
+    raw_username = str(payload.get("twitch_username") or "").strip()
+    quest_def = payload.get("quest")
+    if not raw_username or not isinstance(quest_def, dict) or not str(quest_def.get("id") or "").strip():
+        await _fail(error_code="bad_request", message="twitch_username and quest.id are required.")
+        return
+
+    key = raw_username.lower()
+    participant = _ensure_participant(session, key, str(payload.get("display_name") or key))
+    char = dict(getattr(participant, "arena_character", None) or {})
+    now = time.time()
+
+    if char.get("dead"):
+        await _fail(error_code="dead",
+                    message=f"{participant.character_name or participant.display_name} is dead! Type !stats to be reborn.")
+        return
+
+    existing = char.get("quest")
+    if isinstance(existing, dict):
+        remaining = int(float(existing.get("ends_at", 0) or 0) - now)
+        if remaining > 0:
+            await _fail(error_code="already_questing", remaining_s=remaining,
+                        quest_name=str(existing.get("name") or "a quest"))
+        else:
+            # Finished but not yet resolved — the bridge must resolve first.
+            await _fail(error_code="unresolved_quest", remaining_s=0,
+                        quest_name=str(existing.get("name") or "a quest"))
+        return
+
+    cooldown_until = float(char.get("quest_cooldown_until", 0) or 0)
+    if cooldown_until > now:
+        await _fail(error_code="cooldown", remaining_s=int(cooldown_until - now))
+        return
+
+    try:
+        duration_s = int(quest_def.get("duration_s", 0) or 0)
+        cooldown_s = int(quest_def.get("cooldown_s", 0) or 0)
+    except (TypeError, ValueError):
+        duration_s, cooldown_s = 0, 0
+    duration_s = max(_QUEST_MIN_DURATION_S, min(_QUEST_MAX_DURATION_S, duration_s))
+    cooldown_s = max(0, min(_QUEST_MAX_COOLDOWN_S, cooldown_s))
+
+    quest = {
+        "id": _sanitize(str(quest_def.get("id") or ""), 40),
+        "name": _sanitize(str(quest_def.get("name") or "a quest"), 60),
+        "risk": _sanitize(str(quest_def.get("risk") or ""), 16).lower(),
+        "duration_s": duration_s,
+        "cooldown_s": cooldown_s,
+        "started_at": now,
+        "ends_at": now + duration_s,
+    }
+    char["quest"] = quest
+    participant.arena_character = char
+
+    log_entry = session.add_log(
+        f"{participant.character_name or participant.display_name} set off on quest '{quest['name']}'.",
+        msg_type="chat_bridge",
+        user_name="Chat Bridge",
+    )
+    await manager.broadcast(session.id, {"type": "log_entry", "payload": {"log": log_entry}})
+
+    await manager.send_to(session.id, user.id, {
+        "type": "chat_participant_quest_start_result",
+        "payload": _echo_req(payload, {
+            "success": True,
+            "twitch_username": key,
+            "quest": dict(quest),
+            "remaining_s": duration_s,
+        }),
+    })
+    await save_campaign_async(session)
+
+
+async def handle_chat_participant_quest_resolve(payload: dict, session: Session, user: User):
+    """Bridge asks whether a quest is finished (lazy check or timer fire).
+
+    The server clock is the referee: an in-progress quest returns
+    status=active with the remaining seconds; a finished one is cleared,
+    the per-user quest cooldown is stamped, and status=complete is returned
+    so the bridge can roll the outcome.
+    """
+    raw_username = str(payload.get("twitch_username") or "").strip()
+    key = raw_username.lower()
+    participant = _resolve_participant(session, key)
+    char = dict(getattr(participant, "arena_character", None) or {}) if participant else {}
+    quest = char.get("quest")
+
+    if participant is None or not isinstance(quest, dict):
+        await manager.send_to(session.id, user.id, {
+            "type": "chat_participant_quest_resolve_result",
+            "payload": _echo_req(payload, {"twitch_username": key, "status": "idle"}),
+        })
+        return
+
+    now = time.time()
+    remaining = int(float(quest.get("ends_at", 0) or 0) - now)
+    if remaining > 0:
+        await manager.send_to(session.id, user.id, {
+            "type": "chat_participant_quest_resolve_result",
+            "payload": _echo_req(payload, {
+                "twitch_username": key,
+                "status": "active",
+                "remaining_s": remaining,
+                "quest": dict(quest),
+            }),
+        })
+        return
+
+    session.chat_participants[key] = participant
+    char.pop("quest", None)
+    cooldown_s = max(0, min(_QUEST_MAX_COOLDOWN_S, int(quest.get("cooldown_s", 0) or 0)))
+    if cooldown_s:
+        char["quest_cooldown_until"] = now + cooldown_s
+    participant.arena_character = char
+
+    await manager.send_to(session.id, user.id, {
+        "type": "chat_participant_quest_resolve_result",
+        "payload": _echo_req(payload, {
+            "twitch_username": key,
+            "status": "complete",
+            "quest": dict(quest),
+            "cooldown_s": cooldown_s,
+        }),
+    })
+    await save_campaign_async(session)
+
+
+async def handle_chat_bridge_active_quests(payload: dict, session: Session, user: User):
+    """All in-flight (or finished-but-unresolved) quests, for bridge restarts.
+
+    Lets a freshly started bridge re-arm its return-announcement timers
+    instead of waiting for each chatter's next command.
+    """
+    now = time.time()
+    entries = []
+    for key in list(session.chat_participants.keys()):
+        participant = _resolve_participant(session, key)
+        if participant is None:
+            continue
+        char = getattr(participant, "arena_character", None) or {}
+        quest = char.get("quest") if isinstance(char, dict) else None
+        if not isinstance(quest, dict):
+            continue
+        entries.append({
+            "twitch_username": participant.twitch_username,
+            "display_name": participant.display_name,
+            "quest": dict(quest),
+            "remaining_s": max(0, int(float(quest.get("ends_at", 0) or 0) - now)),
+        })
+
+    await manager.send_to(session.id, user.id, {
+        "type": "chat_bridge_active_quests_result",
+        "payload": _echo_req(payload, {"entries": entries}),
+    })
+
+
+async def handle_chat_participant_arena_death(payload: dict, session: Session, user: User):
+    """PERMADEATH: archive the arena character to the graveyard.
+
+    The dead character's headline stats + death cause are kept as a legacy
+    record; the live sheet is replaced by a tombstone marker that gates all
+    commands until the chatter is reborn via !stats. Optional legacy_gold /
+    heirloom (bridge config) ride on the tombstone into the next life.
+    """
+
+    async def _fail(**out):
+        await manager.send_to(session.id, user.id, {
+            "type": "chat_participant_arena_death_result",
+            "payload": _echo_req(payload, {"success": False, **out}),
+        })
+
+    raw_username = str(payload.get("twitch_username") or "").strip()
+    if not raw_username:
+        await _fail(error_code="bad_request", message="twitch_username is required.")
+        return
+
+    key = raw_username.lower()
+    participant = _resolve_participant(session, key)
+    char = dict(getattr(participant, "arena_character", None) or {}) if participant else {}
+    if char.get("dead"):
+        await _fail(error_code="already_dead", twitch_username=key)
+        return
+    if participant is None or not char.get("class"):
+        await _fail(error_code="no_character", twitch_username=key)
+        return
+
+    session.chat_participants[key] = participant
+    now = time.time()
+    cause = _sanitize(str(payload.get("cause") or "met a mysterious end"), 120)
+
+    def _int_of(val, hi=10_000_000):
+        try:
+            return max(0, min(hi, int(val)))
+        except (TypeError, ValueError):
+            return 0
+
+    record = {
+        "class": str(char.get("class") or ""),
+        "level": _int_of(char.get("level"), 99) or 1,
+        "xp": _int_of(char.get("xp")),
+        "gold": _int_of(char.get("gold")),
+        "wins": _int_of(char.get("wins")),
+        "losses": _int_of(char.get("losses")),
+        "best_streak": _int_of(char.get("best_streak")),
+        "character_name": participant.character_name,
+        "created_at": _int_of(char.get("created_at"), 4_102_444_800_000),
+        "died_at": now,
+        "cause": cause,
+    }
+    graveyard = list(getattr(participant, "graveyard", None) or [])
+    graveyard.append(record)
+    participant.graveyard = graveyard[-_GRAVEYARD_MAX:]
+
+    tombstone = {
+        "dead": True,
+        "died_at": now,
+        "death_cause": cause,
+        "legacy_gold": _int_of(payload.get("legacy_gold")),
+    }
+    heirloom = _sanitize_arena_item(payload.get("heirloom"))
+    if heirloom:
+        tombstone["heirloom"] = heirloom
+    participant.arena_character = tombstone
+
+    # The new life starts from zero; the old one lives on in the graveyard.
+    participant.arena_stats = {"wins": 0, "losses": 0, "arena_gold": 0}
+
+    fallen = record["character_name"] or participant.display_name
+    log_entry = session.add_log(
+        f"☠ {fallen} the {record['class']} (level {record['level']}) has DIED — {cause}.",
+        msg_type="chat_bridge",
+        user_name="Chat Bridge",
+    )
+    await manager.broadcast(session.id, {"type": "log_entry", "payload": {"log": log_entry}})
+    await manager.broadcast(session.id, {
+        "type": "chat_participants_sync",
+        "payload": {"participants": _build_participants_payload(session)},
+    })
+
+    await manager.send_to(session.id, user.id, {
+        "type": "chat_participant_arena_death_result",
+        "payload": _echo_req(payload, {
+            "success": True,
+            "twitch_username": key,
+            "record": dict(record),
+            "graveyard_count": len(participant.graveyard),
+        }),
+    })
+    await save_campaign_async(session)
+
+
+async def handle_chat_participant_graveyard(payload: dict, session: Session, user: User):
+    """Fallen heroes across all chatters, newest first (!graveyard command)."""
+    try:
+        limit = max(1, min(25, int(payload.get("limit", 5) or 5)))
+    except (TypeError, ValueError):
+        limit = 5
+
+    entries = []
+    for key in list(session.chat_participants.keys()):
+        participant = _resolve_participant(session, key)
+        if participant is None:
+            continue
+        for record in (getattr(participant, "graveyard", None) or []):
+            if not isinstance(record, dict):
+                continue
+            entries.append({
+                "twitch_username": participant.twitch_username,
+                "display_name": participant.display_name,
+                "character_name": str(record.get("character_name") or ""),
+                "class": str(record.get("class") or ""),
+                "level": int(record.get("level", 1) or 1),
+                "wins": int(record.get("wins", 0) or 0),
+                "losses": int(record.get("losses", 0) or 0),
+                "cause": str(record.get("cause") or ""),
+                "died_at": float(record.get("died_at", 0) or 0),
+            })
+
+    entries.sort(key=lambda e: -e["died_at"])
+    await manager.send_to(session.id, user.id, {
+        "type": "chat_participant_graveyard_result",
         "payload": _echo_req(payload, {"entries": entries[:limit]}),
     })
 
@@ -1611,6 +2017,7 @@ async def handle_dm_chat_participant_reset(payload: dict, session: Session, user
             participant.arena_character = {}
         if scope == "all":
             participant.character_name = ""
+            participant.graveyard = []
 
     log_entry = session.add_log(
         f"DM reset chat character {_sanitize(raw_username)} (scope: {scope}).",

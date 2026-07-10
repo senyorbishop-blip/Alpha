@@ -27,6 +27,11 @@ const ACK_TYPES = {
   chat_participant_arena_sync: 'chat_participant_arena_sync_result',
   chat_participant_arena_leaderboard: 'chat_participant_arena_leaderboard_result',
   chat_bridge_rewards_get: 'chat_bridge_rewards_result',
+  chat_participant_quest_start: 'chat_participant_quest_start_result',
+  chat_participant_quest_resolve: 'chat_participant_quest_resolve_result',
+  chat_bridge_active_quests: 'chat_bridge_active_quests_result',
+  chat_participant_arena_death: 'chat_participant_arena_death_result',
+  chat_participant_graveyard: 'chat_participant_graveyard_result',
 };
 
 /**

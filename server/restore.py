@@ -137,6 +137,7 @@ def _restore_chat_participants(session: Session, data: dict) -> None:
                 "wins": 0, "losses": 0, "arena_gold": 0,
             }),
             arena_character=dict(p.get("arena_character", None) or {}),
+            graveyard=list(p.get("graveyard", None) or []),
         )
 
 
