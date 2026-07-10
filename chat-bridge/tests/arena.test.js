@@ -33,9 +33,36 @@ function makeArena(opts = {}) {
     config: { duel_cooldown_seconds: 0, ...opts.config },
     logger: { info: () => {}, warn: () => {}, error: () => {} },
     onStatsUpdate: collector.fn,
+    resolveOpponent: opts.resolveOpponent,
   });
   arenas.push(arena);
   return { arena, twitch, collector };
+}
+
+/**
+ * Fake server-side resolver over a roster of
+ * { login: { display, character } } — mirrors chat_participant_resolve.
+ */
+function makeResolver(roster) {
+  return async (name) => {
+    const q = String(name).replace(/^@/, '').trim().toLowerCase();
+    const byLogin = Object.keys(roster).filter(login => login === q);
+    const byDisplay = Object.keys(roster).filter(login =>
+      (roster[login].display || '').toLowerCase() === q);
+    const byChar = Object.keys(roster).filter(login =>
+      (roster[login].character || '').toLowerCase() === q);
+    const hits = byLogin.length ? byLogin : (byDisplay.length ? byDisplay : byChar);
+    if (hits.length === 1) {
+      return {
+        found: true,
+        twitch_username: hits[0],
+        display_name: roster[hits[0]].display,
+        character_name: roster[hits[0]].character,
+      };
+    }
+    if (hits.length > 1) return { found: false, error_code: 'ambiguous', matches: hits };
+    return { found: false, error_code: 'not_found' };
+  };
 }
 
 afterEach(() => {
@@ -173,6 +200,119 @@ describe('Arena — quiet mode', () => {
     expect(arena._queue.length).toBeGreaterThan(0);
     arena.setQuietMode(false);
     expect(arena._queue.length).toBe(0);
+  });
+});
+
+describe('Arena — opponent @-mentions and name resolution', () => {
+  const ROSTER = {
+    potatowizard: { display: 'PotatoWizard', character: 'Grognak' },
+    alice:        { display: 'Alice',        character: '' },
+  };
+
+  test.each([
+    ['@potatowizard'],
+    ['@PotatoWizard'],
+    ['PotatoWizard'],
+    ['potatowizard'],
+    ['Grognak'],
+    ['grognak'],
+  ])('!duel %s resolves to the same opponent login', async (ref) => {
+    const { arena, twitch } = makeArena({ resolveOpponent: makeResolver(ROSTER) });
+    await arena.handleCommand(CH, 'alice', 'Alice', 'duel', [ref]);
+    expect(arena._challenges.has('potatowizard')).toBe(true);
+    const announcement = twitch.said[twitch.said.length - 1].msg;
+    expect(announcement).toContain('@potatowizard');
+    expect(announcement).not.toContain('@@');
+  });
+
+  test('resolved challenge is acceptable by the opponent login', async () => {
+    const { arena } = makeArena({ resolveOpponent: makeResolver(ROSTER) });
+    await arena.handleCommand(CH, 'alice', 'Alice', 'duel', ['Grognak']);
+    arena.handleCommand(CH, 'potatowizard', 'PotatoWizard', 'accept', []);
+    expect(arena._challenges.has('potatowizard')).toBe(false);
+    await new Promise(r => setTimeout(r, 20));  // duel starts async (stats load)
+    expect(arena._activeDuels.has('alice')).toBe(true);
+    expect(arena._activeDuels.has('potatowizard')).toBe(true);
+  });
+
+  test('ambiguous reference asks which opponent instead of challenging', async () => {
+    const roster = {
+      bob:   { display: 'Bob',   character: 'Shadow' },
+      carol: { display: 'Carol', character: 'shadow' },  // same character name, different case
+    };
+    // Force both character names through the ambiguity path
+    const resolver = async () => ({ found: false, error_code: 'ambiguous', matches: ['bob', 'carol'] });
+    const { arena, twitch } = makeArena({ resolveOpponent: resolver });
+    await arena.handleCommand(CH, 'alice', 'Alice', 'duel', ['Shadow']);
+    expect(arena._challenges.size).toBe(0);
+    expect(twitch.replied.some(r => r.msg.toLowerCase().includes('which one'))).toBe(true);
+  });
+
+  test('unknown name falls back to raw login so unjoined chatters can be challenged', async () => {
+    const { arena } = makeArena({ resolveOpponent: makeResolver(ROSTER) });
+    await arena.handleCommand(CH, 'alice', 'Alice', 'duel', ['@SomeLurker']);
+    expect(arena._challenges.has('somelurker')).toBe(true);
+  });
+
+  test('leading @ is stripped even without a resolver', async () => {
+    const { arena, twitch } = makeArena();
+    await arena.handleCommand(CH, 'alice', 'Alice', 'duel', ['@Bob']);
+    expect(arena._challenges.has('bob')).toBe(true);
+    expect(twitch.said[0].msg).not.toContain('@@');
+  });
+
+  test('challenging your own display or character name is rejected as self-challenge', async () => {
+    const { arena, twitch } = makeArena({ resolveOpponent: makeResolver(ROSTER) });
+    await arena.handleCommand(CH, 'potatowizard', 'PotatoWizard', 'duel', ['Grognak']);
+    expect(arena._challenges.size).toBe(0);
+    expect(twitch.replied.some(r => r.msg.includes("can't challenge yourself"))).toBe(true);
+  });
+
+  test('resolver failure falls back to raw name instead of breaking !duel', async () => {
+    const resolver = async () => { throw new Error('server unreachable'); };
+    const { arena } = makeArena({ resolveOpponent: resolver });
+    await arena.handleCommand(CH, 'alice', 'Alice', 'duel', ['@Bob']);
+    expect(arena._challenges.has('bob')).toBe(true);
+  });
+});
+
+describe('Arena — no double-@ in reply templates', () => {
+  test('challenge, decline, and expiry messages never contain @@', async () => {
+    const { arena, twitch } = makeArena();
+    await arena.handleCommand(CH, 'alice', 'Alice', 'duel', ['@Bob']);
+    arena.handleCommand(CH, 'bob', 'Bob', 'decline', []);
+
+    // Expiry path — inject an already-expired challenge with a hostile '@' value
+    arena._challenges.set('charlie', {
+      challenger: '@alice', challengerDisplay: 'Alice', challenged: '@charlie',
+      channel: CH, expiresAt: Date.now() - 1000,
+    });
+    arena._cleanupExpiredChallenges();
+
+    for (const s of twitch.said) expect(s.msg).not.toContain('@@');
+    for (const r of twitch.replied) expect(r.msg).not.toContain('@@');
+  });
+
+  test('fight narration and winner announcement never contain @@', async () => {
+    const { arena, twitch } = makeArena();
+    // Drive a full auto-resolve fight synchronously by stubbing the timers
+    const scheduled = [];
+    const origSetTimeout = global.setTimeout;
+    global.setTimeout = (fn, ms) => { scheduled.push(fn); return origSetTimeout(() => {}, 0); };
+    try {
+      await arena.handleCommand(CH, 'alice', 'Alice', 'duel', ['@Bob']);
+      arena.handleCommand(CH, 'bob', 'Bob', 'accept', []);
+      await new Promise(r => origSetTimeout(r, 20));  // flush async duel start
+      for (const fn of scheduled.splice(0)) fn();     // flush all round messages
+    } finally {
+      global.setTimeout = origSetTimeout;
+    }
+
+    // A full fight was narrated…
+    expect(twitch.said.some(s => s.msg.includes('ARENA DUEL'))).toBe(true);
+    expect(twitch.said.some(s => s.msg.includes('Round 1'))).toBe(true);
+    // …and no message anywhere contains a double @
+    for (const s of twitch.said) expect(s.msg).not.toContain('@@');
   });
 });
 

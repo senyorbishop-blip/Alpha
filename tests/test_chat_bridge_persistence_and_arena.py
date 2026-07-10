@@ -8,6 +8,7 @@ from server.handlers.chat_bridge import (
     _sanitize_arena_character,
     _echo_req,
     _find_participant_key_by_user_id,
+    _match_participants,
 )
 from server.handlers.ws_permissions import (
     is_ws_message_allowed_for_role,
@@ -163,6 +164,64 @@ def test_find_participant_by_user_id_matches_renamed_user():
 
 
 # ---------------------------------------------------------------------------
+# Opponent name resolution (!duel @Name / DisplayName / character name)
+# ---------------------------------------------------------------------------
+
+def _resolve_session():
+    session = Session(id="t4", player_invite="P", viewer_invite="V", created_at=0)
+    session.chat_participants["dave"] = _participant()  # display Dave, character Grognak
+    session.chat_participants["alice"] = _participant(
+        twitch_username="alice", display_name="Alice", character_name="",
+        twitch_user_id="777",
+    )
+    return session
+
+
+def test_match_participants_by_login_display_and_character_name():
+    session = _resolve_session()
+    for query in ("dave", "DAVE", "@dave", "@Dave", "Dave", "grognak", "Grognak", "@Grognak"):
+        assert _match_participants(session, query) == ["dave"], query
+
+
+def test_match_participants_strips_single_leading_at_and_whitespace():
+    session = _resolve_session()
+    assert _match_participants(session, "  @Alice  ") == ["alice"]
+
+
+def test_match_participants_login_beats_character_name_collision():
+    # A chatter who !name'd themselves after someone's login must not hijack it
+    session = _resolve_session()
+    session.chat_participants["mallory"] = _participant(
+        twitch_username="mallory", display_name="Mallory",
+        character_name="Alice", twitch_user_id="888",
+    )
+    assert _match_participants(session, "alice") == ["alice"]
+    assert _match_participants(session, "Mallory") == ["mallory"]
+
+
+def test_match_participants_ambiguous_returns_all_matches():
+    session = Session(id="t5", player_invite="P", viewer_invite="V", created_at=0)
+    session.chat_participants["bob"] = _participant(
+        twitch_username="bob", display_name="Shadow", character_name="",
+        twitch_user_id="1",
+    )
+    session.chat_participants["carol"] = _participant(
+        twitch_username="carol", display_name="Shadow", character_name="",
+        twitch_user_id="2",
+    )
+    assert sorted(_match_participants(session, "@shadow")) == ["bob", "carol"]
+
+
+def test_match_participants_skips_inactive_and_handles_empty():
+    session = _resolve_session()
+    session.chat_participants["dave"].is_active = False
+    assert _match_participants(session, "Grognak") == []
+    assert _match_participants(session, "") == []
+    assert _match_participants(session, "@") == []
+    assert _match_participants(session, "nobody") == []
+
+
+# ---------------------------------------------------------------------------
 # Role isolation: the bridge can only do chat-participant/arena actions
 # ---------------------------------------------------------------------------
 
@@ -181,6 +240,7 @@ def test_chat_bridge_role_allows_arena_persistence_types():
         "chat_participant_arena_load",
         "chat_participant_arena_sync",
         "chat_participant_arena_leaderboard",
+        "chat_participant_resolve",
     ):
         assert msg_type in CHAT_BRIDGE_ALLOWED_MESSAGE_TYPES
         assert is_ws_message_allowed_for_role(msg_type, "chat_bridge").allowed

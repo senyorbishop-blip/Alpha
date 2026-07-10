@@ -30,6 +30,12 @@ const MSG_INTERVAL   = 5 * 1000;  // ms between dramatic messages
 
 function d(sides) { return Math.floor(Math.random() * sides) + 1; }
 
+/** Strip leading '@'s so a value can be safely inserted after a literal '@'. */
+function stripAt(name) { return String(name ?? '').replace(/^@+/, ''); }
+
+/** Render a chat mention — never produces '@@' even if the value has an '@'. */
+function mention(name) { return `@${stripAt(name)}`; }
+
 class Arena {
   /**
    * @param {object} opts
@@ -38,13 +44,16 @@ class Arena {
    * @param {object} [opts.logger]         — { info, warn, error }
    * @param {function} [opts.onStatsUpdate]    — (username, {wins, losses, arena_gold}) → Promise<void>
    * @param {function} [opts.onDisplayEvent]   — (eventPayload) → void  (for OBS overlay)
+   * @param {function} [opts.resolveOpponent]  — (name) → Promise<{found, twitch_username, error_code, matches}|null>
+   *                                             maps a login/display/character name to a login username
    */
-  constructor({ twitchClient, config = {}, logger, onStatsUpdate, onDisplayEvent, progression }) {
+  constructor({ twitchClient, config = {}, logger, onStatsUpdate, onDisplayEvent, progression, resolveOpponent }) {
     this._twitch      = twitchClient;
     this._config      = config;
     this._logger      = logger || console;
     this._onStats     = onStatsUpdate  || (() => Promise.resolve());
     this._onDisplay   = onDisplayEvent || (() => {});
+    this._resolveOpponent = resolveOpponent || null;
     // Optional ArenaProgression: when attached, duels use each fighter's
     // class/level/gear-derived HP/AC/attack and award XP + gold on finish.
     this._progression = progression || null;
@@ -100,7 +109,12 @@ class Arena {
   handleCommand(channel, username, displayName, action, args) {
     try {
       switch (action) {
-        case 'duel':    this._handleDuel(channel, username, displayName, args); break;
+        // _handleDuel is async (opponent resolution may query the server);
+        // return the promise so callers/tests can await it. Errors are caught
+        // here so a rejection can never escape the arena.
+        case 'duel':
+          return this._handleDuel(channel, username, displayName, args)
+            .catch(err => this._logger.error('[Arena] handleCommand error:', err));
         case 'accept':  this._handleAccept(channel, username, displayName); break;
         case 'decline': this._handleDecline(channel, username, displayName); break;
         case 'attack':
@@ -117,18 +131,20 @@ class Arena {
 
   // ── Duel lifecycle ───────────────────────────────────────────────────────────
 
-  _handleDuel(channel, username, displayName, args) {
+  async _handleDuel(channel, username, displayName, args) {
     if (!this._enabled) {
       this._twitch.reply(channel, username, 'The arena is closed right now.');
       return;
     }
 
-    const targetName = (args[0] || '').toLowerCase().trim();
-    if (!targetName) {
+    // Chatters use Twitch @-autocomplete ("!duel @PotatoWizard") — strip a
+    // leading '@' here too in case args arrive un-normalized.
+    const rawTarget = stripAt((args[0] || '').trim());
+    if (!rawTarget) {
       this._twitch.reply(channel, username, 'Usage: !duel <username>');
       return;
     }
-    if (targetName === username) {
+    if (rawTarget.toLowerCase() === username) {
       this._twitch.reply(channel, username, "You can't challenge yourself!");
       return;
     }
@@ -155,10 +171,38 @@ class Arena {
       }
     }
 
+    // Resolve the opponent reference (login, display name, or !name character
+    // name — case-insensitive). The challenge must be keyed by the opponent's
+    // login username or their !accept will never find it.
+    let targetName = rawTarget.toLowerCase();
+    if (this._resolveOpponent) {
+      let res = null;
+      try {
+        res = await this._resolveOpponent(rawTarget);
+      } catch (err) {
+        this._logger.error('[Arena] opponent resolve error:', err);
+      }
+      if (res?.found && res.twitch_username) {
+        targetName = String(res.twitch_username).toLowerCase();
+      } else if (res?.error_code === 'ambiguous') {
+        const options = (res.matches || []).join(', ');
+        this._twitch.reply(channel, username,
+          `Multiple chatters match "${rawTarget}" — which one? ${options}`);
+        return;
+      }
+      // not_found / lookup unavailable → fall back to the raw name so
+      // chatters who haven't joined yet can still be challenged by login.
+    }
+
+    if (targetName === username) {
+      this._twitch.reply(channel, username, "You can't challenge yourself!");
+      return;
+    }
+
     const expiresAt = Date.now() + CHALLENGE_TTL;
     this._challenges.set(targetName, { challenger: username, challengerDisplay: displayName, challenged: targetName, channel, expiresAt });
 
-    this._twitch.say(channel, `@${targetName} ${displayName} challenges you to a duel! Type !accept or !decline in ${Math.round(CHALLENGE_TTL / 1000)}s.`);
+    this._twitch.say(channel, `${mention(targetName)} ${displayName} challenges you to a duel! Type !accept or !decline in ${Math.round(CHALLENGE_TTL / 1000)}s.`);
   }
 
   _handleAccept(channel, username, displayName) {
@@ -191,7 +235,7 @@ class Arena {
       return;
     }
     this._challenges.delete(username);
-    this._twitch.say(channel, `${displayName} declined the duel challenge from @${challenge.challenger}.`);
+    this._twitch.say(channel, `${displayName} declined the duel challenge from ${mention(challenge.challenger)}.`);
   }
 
   // ── Auto-resolve fight ───────────────────────────────────────────────────────
@@ -243,7 +287,7 @@ class Arena {
     this._activeDuels.set(challenger, state);
     this._activeDuels.set(challenged, state);
 
-    this._twitch.say(channel, `⚔️ ARENA DUEL: @${challenger} vs @${challenged} — Fight begins!`);
+    this._twitch.say(channel, `⚔️ ARENA DUEL: ${mention(challenger)} vs ${mention(challenged)} — Fight begins!`);
 
     this._onDisplay({
       event_type: 'duel_start',
@@ -283,16 +327,16 @@ class Arena {
         p[defender].hp = Math.max(0, p[defender].hp - dmg);
         const flavour = roll >= 18 ? 'critical strike' : roll >= 14 ? 'solid blow' : 'hit';
         const rollLabel = atk ? `${roll}+${atk}` : `${roll}`;
-        messages.push(`Round ${r + 1}: @${attacker} rolled ${rollLabel} — ${flavour}! @${defender} takes ${dmg} damage. (${p[defender].hp}/${p[defender].maxHp || ARENA_HP} HP remaining)`);
+        messages.push(`Round ${r + 1}: ${mention(attacker)} rolled ${rollLabel} — ${flavour}! ${mention(defender)} takes ${dmg} damage. (${p[defender].hp}/${p[defender].maxHp || ARENA_HP} HP remaining)`);
         if (p[defender].hp <= 0) {
-          messages.push(`💀 @${defender} has been defeated! @${attacker} wins the duel!`);
+          messages.push(`💀 ${mention(defender)} has been defeated! ${mention(attacker)} wins the duel!`);
           state.finished = true;
           state.winner = attacker;
           state.loser = defender;
           break;
         }
       } else {
-        messages.push(`Round ${r + 1}: @${attacker} rolled ${roll} — miss! @${defender} dodges.`);
+        messages.push(`Round ${r + 1}: ${mention(attacker)} rolled ${roll} — miss! ${mention(defender)} dodges.`);
       }
 
       // Swap attacker/defender
@@ -306,7 +350,7 @@ class Arena {
       if (hpA !== hpB) {
         state.winner = hpA > hpB ? challenger : challenged;
         state.loser  = hpA > hpB ? challenged : challenger;
-        messages.push(`Time's up! @${state.winner} wins by HP advantage! (${Math.max(hpA, hpB)} vs ${Math.min(hpA, hpB)} HP)`);
+        messages.push(`Time's up! ${mention(state.winner)} wins by HP advantage! (${Math.max(hpA, hpB)} vs ${Math.min(hpA, hpB)} HP)`);
       } else {
         messages.push(`Time's up! It's a DRAW — both fighters remain standing!`);
         state.winner = null;
@@ -346,7 +390,7 @@ class Arena {
     if (state.finished) return;
 
     this._twitch.say(state.channel,
-      `@${attacker} it's your turn! Type !attack, !defend, or !flee (${Math.round(TURN_TIMER_MS / 1000)}s)`
+      `${mention(attacker)} it's your turn! Type !attack, !defend, or !flee (${Math.round(TURN_TIMER_MS / 1000)}s)`
     );
 
     state.currentAttacker = attacker;
@@ -372,7 +416,7 @@ class Arena {
 
     let msg;
     if (action === 'flee') {
-      msg = `@${attacker} fled the arena! @${defender} wins by default!`;
+      msg = `${mention(attacker)} fled the arena! ${mention(defender)} wins by default!`;
       state.winner = defender;
       state.loser  = attacker;
       state.finished = true;
@@ -387,7 +431,7 @@ class Arena {
     state.round = (state.round || 0) + 1;
 
     if (action === 'defend') {
-      msg = `@${attacker} braces for impact (AC+4 this round). @${defender} attacks — rolled ${roll}...`;
+      msg = `${mention(attacker)} braces for impact (AC+4 this round). ${mention(defender)} attacks — rolled ${roll}...`;
       const effectiveAC = (p[attacker].ac || ARENA_AC) + 4;
       if (roll + (p[defender].atkBonus || 0) >= effectiveAC) {
         const dmg = Math.max(1, d(ARENA_DMG_DIE) - 2);
@@ -401,9 +445,9 @@ class Arena {
       if (roll + (p[attacker].atkBonus || 0) >= (p[defender].ac || ARENA_AC)) {
         const dmg = d(ARENA_DMG_DIE);
         p[defender].hp = Math.max(0, p[defender].hp - dmg);
-        msg = `@${attacker} attacks (rolled ${roll}) — hits for ${dmg} damage! @${defender}: ${p[defender].hp}/${p[defender].maxHp || ARENA_HP} HP`;
+        msg = `${mention(attacker)} attacks (rolled ${roll}) — hits for ${dmg} damage! ${mention(defender)}: ${p[defender].hp}/${p[defender].maxHp || ARENA_HP} HP`;
       } else {
-        msg = `@${attacker} attacks (rolled ${roll}) — miss!`;
+        msg = `${mention(attacker)} attacks (rolled ${roll}) — miss!`;
       }
     }
 
@@ -416,7 +460,7 @@ class Arena {
       state.winner = winner?.username ?? null;
       state.loser  = loser.username;
       state.finished = true;
-      this._twitch.say(state.channel, `💀 @${loser.username} is down! @${winner?.username ?? '?'} wins!`);
+      this._twitch.say(state.channel, `💀 ${mention(loser.username)} is down! ${mention(winner?.username ?? '?')} wins!`);
       const parts = Object.keys(p);
       this._finishDuel(state, parts[0], parts[1]);
     } else {
@@ -486,7 +530,7 @@ class Arena {
       if (now > ch.expiresAt) {
         this._challenges.delete(key);
         this._twitch.say(ch.channel,
-          `@${ch.challenged} — the duel challenge from @${ch.challenger} has expired.`
+          `${mention(ch.challenged)} — the duel challenge from ${mention(ch.challenger)} has expired.`
         );
       }
     }

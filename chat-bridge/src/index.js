@@ -317,6 +317,9 @@ async function main() {
       interactiveMode: false,
     },
     logger,
+    // Map a chatter-typed opponent reference (login, display name, or !name
+    // character name — with or without a leading @) to a login username.
+    resolveOpponent: (name) => gameClient.send('chat_participant_resolve', { name }),
     onStatsUpdate: async (username, stats) => {
       await gameClient.send('chat_participant_arena_stats_update', {
         twitch_username: username,
