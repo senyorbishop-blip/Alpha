@@ -14,10 +14,21 @@
  *   !decline       — decline pending challenge
  *
  * Auto-resolve mode (default):
- *   Fight plays out as 3–5 messages over ~20s using simple d20 rolls.
+ *   Fight plays out as 3–5 rounds using simple d20 rolls.
  *
  * Interactive mode (config.interactiveMode = true):
  *   !attack / !defend / !flee with 15s turn timers.
+ *
+ * CHAT vs TICKER (rule of thumb for future features):
+ *   Continuous or multi-step events → ticker. Results and personal replies →
+ *   chat. One chat line per completed event, rewards included.
+ *
+ *   By default (slim narration) the duel start and round-by-round narration
+ *   go ONLY to the overlay ticker (via onTickerEvent, ~2s pacing) and chat
+ *   gets a single result line with the rewards, e.g.
+ *   "🏆 Grognak defeats PotatoWizard in 4 rounds! +60 XP, +15 gold".
+ *   Streamers who want the classic round-by-round chat narration back set
+ *   config.fullChatNarration (chat-bridge config/stream.json).
  */
 
 const ARENA_HP       = 20;
@@ -26,7 +37,8 @@ const ARENA_DMG_DIE  = 6;   // 1d6 damage
 const CHALLENGE_TTL  = 60 * 1000;  // ms
 const DUEL_COOLDOWN  = 2 * 60 * 1000;  // ms default
 const TURN_TIMER_MS  = 15 * 1000;
-const MSG_INTERVAL   = 5 * 1000;  // ms between dramatic messages
+const MSG_INTERVAL   = 5 * 1000;  // ms between chat round messages (full narration)
+const TICKER_INTERVAL = 2 * 1000; // ms between ticker round lines (slim mode)
 
 function d(sides) { return Math.floor(Math.random() * sides) + 1; }
 
@@ -44,15 +56,17 @@ class Arena {
    * @param {object} [opts.logger]         — { info, warn, error }
    * @param {function} [opts.onStatsUpdate]    — (username, {wins, losses, arena_gold}) → Promise<void>
    * @param {function} [opts.onDisplayEvent]   — (eventPayload) → void  (for OBS overlay)
+   * @param {function} [opts.onTickerEvent]    — (category, text, icon?) → void  (overlay event ticker)
    * @param {function} [opts.resolveOpponent]  — (name) → Promise<{found, twitch_username, error_code, matches}|null>
    *                                             maps a login/display/character name to a login username
    */
-  constructor({ twitchClient, config = {}, logger, onStatsUpdate, onDisplayEvent, progression, resolveOpponent }) {
+  constructor({ twitchClient, config = {}, logger, onStatsUpdate, onDisplayEvent, onTickerEvent, progression, resolveOpponent }) {
     this._twitch      = twitchClient;
     this._config      = config;
     this._logger      = logger || console;
     this._onStats     = onStatsUpdate  || (() => Promise.resolve());
     this._onDisplay   = onDisplayEvent || (() => {});
+    this._onTicker    = onTickerEvent  || (() => {});
     this._resolveOpponent = resolveOpponent || null;
     // Optional ArenaProgression: when attached, duels use each fighter's
     // class/level/gear-derived HP/AC/attack and award XP + gold on finish.
@@ -78,6 +92,26 @@ class Arena {
 
     // All pending duel-message timeouts, so destroy() can cancel in-flight duels
     this._messageTimers = new Set();
+  }
+
+  // ── Narration routing ───────────────────────────────────────────────────────
+
+  /** Classic round-by-round chat narration (config/stream.json toggle). */
+  get _fullChat() { return !!this._config.fullChatNarration; }
+
+  /** Send a line to the overlay ticker ('@' stripped — mentions are chat-only). */
+  _ticker(text, category = 'duel') {
+    try {
+      this._onTicker(category, String(text).replace(/@/g, ''));
+    } catch (err) {
+      this._logger.error('[Arena] ticker emit error:', err);
+    }
+  }
+
+  /** Play-by-play line: ticker always, chat only in full narration mode. */
+  _narrate(channel, msg) {
+    if (this._fullChat) this._twitch.say(channel, msg);
+    this._ticker(msg);
   }
 
   // ── Public API ──────────────────────────────────────────────────────────────
@@ -345,7 +379,8 @@ class Arena {
       .filter(u => state.participants[u].hp < state.participants[u].maxHp)
       .map(u => `${mention(u)} enters wounded (${state.participants[u].hp}/${state.participants[u].maxHp} HP)`)
       .join(', ');
-    this._twitch.say(channel,
+    // Duel start is play-by-play: ticker by default, chat only in full mode.
+    this._narrate(channel,
       `⚔️ ARENA DUEL: ${mention(challenger)} vs ${mention(challenged)} — Fight begins!${wounded ? ` ${wounded}.` : ''}`);
 
     this._onDisplay({
@@ -376,6 +411,7 @@ class Arena {
     let defender = challenged;
 
     for (let r = 0; r < maxRounds && !state.finished; r++) {
+      state.round = r + 1;
       const p = state.participants;
       const roll = d(20);
       const atk = p[attacker].atkBonus || 0;
@@ -423,11 +459,14 @@ class Arena {
       state.finished = true;
     }
 
-    // Send messages with delay, emitting display events alongside each round
+    // Send round narration with delay, emitting display events alongside each
+    // round. Slim mode paces the ticker at ~2s; full chat narration keeps the
+    // classic 5s chat cadence.
+    const interval = this._fullChat ? MSG_INTERVAL : TICKER_INTERVAL;
     messages.forEach((msg, i) => {
       const timer = setTimeout(() => {
         this._messageTimers.delete(timer);
-        this._twitch.say(state.channel, msg);
+        this._narrate(state.channel, msg);
         const p = state.participants;
         this._onDisplay({
           event_type: 'round',
@@ -443,7 +482,7 @@ class Arena {
         if (i === messages.length - 1) {
           this._finishDuel(state, challenger, challenged);
         }
-      }, i * MSG_INTERVAL);
+      }, i * interval);
       this._messageTimers.add(timer);
     });
   }
@@ -505,6 +544,7 @@ class Arena {
       state.loser  = attacker;
       state.finished = true;
       this._twitch.say(state.channel, msg);
+      this._ticker(msg);
       const [ch, cd] = [Object.keys(state.participants)[0], Object.keys(state.participants)[1]];
       this._finishDuel(state, ch, cd);
       return;
@@ -535,13 +575,19 @@ class Arena {
       }
     }
 
+    // Interactive turns are conversations, so they stay in chat — but the
+    // ticker mirrors the blow-by-blow so the overlay feed tells the story too.
     this._twitch.say(state.channel, msg);
+    this._ticker(msg);
 
     // Death-blow save before the KO check (auto_potion toggle)
     const downed = Object.values(p).find(pp => pp.hp <= 0);
     if (downed) {
       const potionMsg = this._tryAutoPotion(state, downed.username);
-      if (potionMsg) this._twitch.say(state.channel, potionMsg);
+      if (potionMsg) {
+        this._twitch.say(state.channel, potionMsg);
+        this._ticker(potionMsg);
+      }
     }
 
     // Check for KO
@@ -551,7 +597,7 @@ class Arena {
       state.winner = winner?.username ?? null;
       state.loser  = loser.username;
       state.finished = true;
-      this._twitch.say(state.channel, `💀 ${mention(loser.username)} is down! ${mention(winner?.username ?? '?')} wins!`);
+      this._narrate(state.channel, `💀 ${mention(loser.username)} is down! ${mention(winner?.username ?? '?')} wins!`);
       const parts = Object.keys(p);
       this._finishDuel(state, parts[0], parts[1]);
     } else {
@@ -586,7 +632,13 @@ class Arena {
       if (this._progression) {
         // Progression owns persistent stats: XP, gold, streaks, win/loss all
         // land on the arena character sheet and sync to the server there.
-        this._progression.recordDuelResult(state.winner, state.loser, state.channel)
+        // Slim mode: suppress its separate rewards line and fold the rewards
+        // into the ONE result line chat gets for the whole duel.
+        this._progression.recordDuelResult(state.winner, state.loser, state.channel,
+          { announce: this._fullChat })
+          .then(rewards => {
+            if (!this._fullChat) this._announceResult(state, rewards);
+          })
           .catch(err => this._logger.error('[Arena] progression result error:', err));
       } else {
         // Legacy in-memory stats path
@@ -602,8 +654,36 @@ class Arena {
         this._onStats(state.loser, { ...lStats }).catch(err =>
           this._logger.error('[Arena] stats sync error:', err)
         );
+        if (!this._fullChat) this._announceResult(state, null);
       }
+    } else if (state.finished && !this._fullChat) {
+      // Draw — chat still gets its one completed-event line.
+      this._announceResult(state, null);
     }
+  }
+
+  /**
+   * The single chat line a duel produces in slim mode — result AND rewards:
+   *   "🏆 Grognak defeats PotatoWizard in 4 rounds! +60 XP, +15 gold"
+   * (Mirrored to the ticker so the feed shows the ending too.)
+   */
+  _announceResult(state, rewards) {
+    const rounds = Math.max(1, state.round || 1);
+    const roundsLabel = `${rounds} round${rounds === 1 ? '' : 's'}`;
+    let msg;
+    if (state.winner && state.loser) {
+      msg = `🏆 ${mention(state.winner)} defeats ${mention(state.loser)} in ${roundsLabel}!`;
+      if (rewards) {
+        msg += ` +${rewards.xpWin} XP, +${rewards.goldWin} gold`
+          + `${rewards.winnerReady ? ' — ready to !levelup!' : '.'}`
+          + ` ${mention(state.loser)} earns +${rewards.xpLoss} XP, +${rewards.goldLoss} gold for the effort.`;
+      }
+    } else {
+      const [a, b] = Object.keys(state.participants);
+      msg = `🤝 ${mention(a)} and ${mention(b)} fight to a DRAW after ${roundsLabel} — both remain standing!`;
+    }
+    this._twitch.say(state.channel, msg);
+    this._ticker(msg);
   }
 
   _getStats(username) {

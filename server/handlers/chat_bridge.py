@@ -1399,12 +1399,75 @@ async def handle_dm_grant_chat_participant_item(payload: dict, session: Session,
         "type": "log_entry",
         "payload": {"log": log_entry},
     })
+    await emit_ticker(
+        session,
+        f"{participant.display_name} was granted {item_name}!",
+        category="grant",
+        icon="🎁",
+    )
     await manager.send_to(session.id, user.id, {
         "type": "chat_participant_item_granted",
         "payload": {"success": True, "item_name": item_name},
     })
 
     await save_campaign_async(session)
+
+
+# ---------------------------------------------------------------------------
+# Overlay event ticker  (rolling play-by-play feed on the stream overlay)
+#
+# Rule of thumb for future features:
+#   Continuous or multi-step events → ticker. Results and personal replies →
+#   chat. One chat line per completed event, rewards included.
+#
+# Every ticker_event carries a session-scoped monotonically increasing seq
+# number so overlays can detect dropped events (gap detection). The counter is
+# in-memory only — the ticker is a live feed, not a log; after a server
+# restart seq restarts at 1 and clients simply resync.
+# ---------------------------------------------------------------------------
+
+_TICKER_MAX_TEXT = 220
+_TICKER_MAX_ICON = 8
+
+
+def next_ticker_seq(session: Session) -> int:
+    seq = int(getattr(session, "ticker_seq", 0) or 0) + 1
+    session.ticker_seq = seq
+    return seq
+
+
+async def emit_ticker(session: Session, text: str, *, category: str = "event", icon: str = "") -> None:
+    """Broadcast a ticker_event to every connected client (overlays render it)."""
+    safe_text = _sanitize(str(text or ""), _TICKER_MAX_TEXT)
+    if not safe_text:
+        return
+    await manager.broadcast(session.id, {
+        "type": "ticker_event",
+        "payload": {
+            "seq": next_ticker_seq(session),
+            "category": _sanitize(str(category or "event"), 24),
+            "icon": str(icon or "").strip()[:_TICKER_MAX_ICON],
+            "text": safe_text,
+            "ts": time.time(),
+        },
+    })
+
+
+async def handle_ticker_event(payload: dict, session: Session, user: User):
+    """Relay a bridge-originated ticker event to overlays.
+
+    Display-only — no game state is modified. The server owns the seq stamp
+    so bridge- and server-originated events share one gapless sequence.
+    """
+    text = str(payload.get("text") or "").strip()
+    if not text:
+        return
+    await emit_ticker(
+        session,
+        text,
+        category=str(payload.get("category") or "event"),
+        icon=str(payload.get("icon") or ""),
+    )
 
 
 # ---------------------------------------------------------------------------

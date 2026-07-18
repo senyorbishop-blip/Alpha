@@ -284,6 +284,7 @@ from server.handlers.chat_bridge import (
     handle_dm_grant_chat_participant_item,
     handle_chat_participant_arena_stats_update,
     handle_arena_display_event,
+    handle_ticker_event,
     handle_chat_participant_arena_load,
     handle_chat_participant_arena_sync,
     handle_chat_participant_arena_leaderboard,
@@ -569,6 +570,8 @@ async def handle_message(raw: dict, session: Session, user: User):
         "chat_participant_graveyard":     handle_chat_participant_graveyard,
         # ── Arena display event relay (chat_bridge role, overlay broadcast) ─
         "arena_display_event": handle_arena_display_event,
+        # ── Overlay event ticker relay (chat_bridge role, overlay broadcast) ─
+        "ticker_event": handle_ticker_event,
     }
 
     decision = is_ws_message_allowed_for_role(msg_type, getattr(user, "role", None))

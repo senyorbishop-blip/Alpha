@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Tavern Tabletop — Event Ticker Overlay</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: transparent;
+      overflow: hidden;
+      font-family: 'Georgia', 'Times New Roman', serif;
+      width: 100vw;
+      height: 100vh;
+    }
+
+    /* ── Connection status dot (only visible when disconnected) ─ */
+    #conn-dot {
+      position: fixed;
+      top: 10px;
+      left: 10px;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #e07070;
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+    #conn-dot.disconnected { opacity: 0.7; }
+  </style>
+</head>
+<body class="ticker-standalone">
+
+<div id="conn-dot"></div>
+
+{% include "_ticker_widget.html" %}
+
+<script>
+(function () {
+  'use strict';
+
+  var SESSION_ID  = {{ session_id | tojson }};
+  var WS_TOKEN    = {{ overlay_jwt | tojson }};
+  var WS_BASE_URL = {{ ws_url | tojson }};
+
+  var ws = null;
+  var reconnectDelay = 1000;
+  var maxDelay = 30000;
+
+  // ── Connection ─────────────────────────────────────────────────────────────
+
+  function connect() {
+    var url = WS_BASE_URL + '/ws/' + SESSION_ID + '/overlay_ticker?token=' + encodeURIComponent(WS_TOKEN);
+    ws = new WebSocket(url);
+
+    ws.onopen = function () {
+      reconnectDelay = 1000;
+      document.getElementById('conn-dot').classList.remove('disconnected');
+    };
+
+    ws.onclose = function () {
+      document.getElementById('conn-dot').classList.add('disconnected');
+      setTimeout(connect, reconnectDelay);
+      reconnectDelay = Math.min(reconnectDelay * 2, maxDelay);
+    };
+
+    ws.onerror = function () { ws.close(); };
+
+    ws.onmessage = function (evt) {
+      try {
+        var msg = JSON.parse(evt.data);
+        handleMessage(msg);
+      } catch (_) {}
+    };
+  }
+
+  // ── Heartbeat ──────────────────────────────────────────────────────────────
+
+  setInterval(function () {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'pong' }));
+    }
+  }, 20000);
+
+  // ── Event handler ──────────────────────────────────────────────────────────
+
+  function handleMessage(msg) {
+    var t = msg.type;
+    var p = msg.payload || {};
+
+    if (t === 'ping') {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'pong' }));
+      }
+      return;
+    }
+
+    if (t === 'ticker_event') {
+      // Seq gaps (events missed while disconnected) render a marker inside
+      // the widget — missed history is skipped, this is a live feed.
+      if (window.TickerFeed) window.TickerFeed.handleEvent(p);
+      return;
+    }
+  }
+
+  connect();
+})();
+</script>
+</body>
+</html>

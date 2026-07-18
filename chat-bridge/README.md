@@ -171,6 +171,34 @@ Bits tiers are configured as an array with `threshold` values — the highest th
 
 ---
 
+## 5b. Chat Narration vs. the Overlay Event Ticker
+
+By default chat is kept **slim**: play-by-play (duel start + round-by-round
+narration) goes to the **overlay event ticker** — a rolling feed built into
+the Game Overlay browser source (and available standalone as the "Event
+Ticker" URL in the Stream panel) — and chat gets **one line per completed
+event, rewards included**, e.g.:
+
+```
+🏆 Grognak defeats PotatoWizard in 4 rounds! +60 XP, +15 gold.
+```
+
+Quest departures/returns, reward rolls, level-ups, deaths, and item uses keep
+their single chat line and are mirrored to the ticker. Direct replies to a
+chatter's own command (`!inventory`, `!me`, errors, follow-up prompts) always
+stay in chat.
+
+Streamers who want the classic round-by-round duel narration back in chat set
+`config/stream.json`:
+
+```json
+{ "full_chat_narration": true }
+```
+
+(or `CHAT_FULL_NARRATION=true` in the environment) and restart the bridge.
+
+---
+
 ## 6. Add Custom Chat Commands
 
 Edit `config/commands.json`. Supported actions: `join`, `leave`, `inventory`,

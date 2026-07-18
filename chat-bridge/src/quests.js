@@ -161,7 +161,7 @@ class QuestManager {
    * @param {object} [opts.logger]
    * @param {function} [opts.rand]     — RNG override for tests
    */
-  constructor({ gameClient, twitchClient, progression, config, channel, logger, rand }) {
+  constructor({ gameClient, twitchClient, progression, config, channel, logger, rand, onTickerEvent }) {
     this._game = gameClient;
     this._twitch = twitchClient;
     this._progression = progression;
@@ -169,6 +169,7 @@ class QuestManager {
     this._config = mergeQuestConfig(DEFAULT_QUEST_CONFIG, config);
     this._channel = channel || null;
     this._rand = rand || Math.random;
+    this._onTicker = onTickerEvent || (() => {});
 
     this._timers = new Map();      // username → setTimeout handle
     this._resolving = new Set();   // usernames with an in-flight resolve
@@ -184,19 +185,38 @@ class QuestManager {
   get config() { return this._config; }
 
   // ── Quiet mode (announcement queue) ─────────────────────────────────────────
+  // Chat vs ticker rule of thumb: continuous or multi-step events → ticker;
+  // results and personal replies → chat. One chat line per completed event,
+  // rewards included. Quest returns are completed events, so each gets one
+  // chat line (with the haul) mirrored to the overlay ticker.
 
   setQuiet(quiet) {
     this._quiet = !!quiet;
     if (!this._quiet && this._queued.length) {
       this._logger.info(`[Quests] quiet mode off — announcing ${this._queued.length} queued returns`);
       const queued = this._queued.splice(0);
-      for (const { channel, msg } of queued) this._twitch.say(channel, msg);
+      for (const { channel, msg, category } of queued) this._say(channel, msg, category);
     }
   }
 
-  _announce(channel, msg) {
-    if (this._quiet) this._queued.push({ channel, msg });
-    else this._twitch.say(channel, msg);
+  /** Mirror an announcement to the overlay ticker ('@' is chat-only). */
+  _ticker(category, text) {
+    try {
+      this._onTicker(category || 'quest', String(text).replace(/@/g, ''));
+    } catch (err) {
+      this._logger.error('[Quests] ticker emit error:', err);
+    }
+  }
+
+  _say(channel, msg, category) {
+    this._twitch.say(channel, msg);
+    this._ticker(category, msg);
+  }
+
+  /** Quiet mode (DM downtime) queues both the chat line AND its ticker echo. */
+  _announce(channel, msg, category = 'quest') {
+    if (this._quiet) this._queued.push({ channel, msg, category });
+    else this._say(channel, msg, category);
   }
 
   // ── Startup resume (bridge restart mid-quest) ───────────────────────────────
@@ -338,9 +358,10 @@ class QuestManager {
       if (sheet) sheet.quest = { ...result.quest, local_ends_at: Date.now() + remainingS * 1000 };
       this._schedule(username, remainingS * 1000);
       const flavor = pick(this._rand, quest.flavor?.depart);
-      this._twitch.say(channel,
+      // Departure = one completed-event chat line, mirrored to the ticker.
+      this._say(channel,
         `🗺️ ${mention(username)} sets off on ${quest.name} (${this._riskLabel(quest)}) — ` +
-        `back in ${formatDuration(remainingS)}.${flavor ? ` ${flavor}` : ''}`);
+        `back in ${formatDuration(remainingS)}.${flavor ? ` ${flavor}` : ''}`, 'quest');
       return;
     }
 
@@ -536,7 +557,8 @@ class QuestManager {
     const flavor = pick(this._rand, def.flavor?.death);
     this._announce(channel,
       `☠️ TRAGEDY! ${mention(username)}'s ${cls} (level ${level}) has FALLEN on ${quest.name || 'a quest'}.` +
-      `${flavor ? ` ${flavor}` : ''} Their deeds enter the !graveyard. Type !stats to be reborn.`);
+      `${flavor ? ` ${flavor}` : ''} Their deeds enter the !graveyard. Type !stats to be reborn.`,
+      'death');
   }
 
   // ── Graveyard ───────────────────────────────────────────────────────────────

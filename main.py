@@ -726,8 +726,9 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, user_id: str
             session.users["chat_bridge"] = user
 
     # Allow overlay clients to auto-create their ephemeral read-only user on connect.
-    # user_id must be "overlay_game" or "overlay_arena"; JWT must carry role="overlay".
-    if not user and user_id in ("overlay_game", "overlay_arena") and token:
+    # user_id must be "overlay_game", "overlay_arena", or "overlay_ticker";
+    # JWT must carry role="overlay".
+    if not user and user_id in ("overlay_game", "overlay_arena", "overlay_ticker") and token:
         _pre_jwt = verify_token(token)
         if _pre_jwt and str(_pre_jwt.get("role") or "") == "overlay":
             from server.session import User as _User

@@ -172,6 +172,8 @@
   <div class="winner-votes" id="winner-votes"></div>
 </div>
 
+{% include "_ticker_widget.html" %}
+
 <script>
 (function () {
   'use strict';
@@ -231,6 +233,12 @@
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'pong' }));
       }
+      return;
+    }
+
+    if (t === 'ticker_event') {
+      // Rolling play-by-play feed (duel rounds, quests, rewards, level-ups…).
+      if (window.TickerFeed) window.TickerFeed.handleEvent(p);
       return;
     }
 

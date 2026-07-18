@@ -90,10 +90,11 @@ class ArenaProgression {
    * @param {object} opts.twitchClient — { say, reply }
    * @param {object} [opts.logger]
    */
-  constructor({ gameClient, twitchClient, logger, shopCatalog, legacyConfig }) {
+  constructor({ gameClient, twitchClient, logger, shopCatalog, legacyConfig, onTickerEvent }) {
     this._game = gameClient;
     this._twitch = twitchClient;
     this._logger = logger || console;
+    this._onTicker = onTickerEvent || (() => {});
     this._sheets = new Map();      // username → sheet (cache of server state)
     this._loading = new Map();     // username → Promise (de-dupe concurrent loads)
     this._shop = Array.isArray(shopCatalog) && shopCatalog.length ? shopCatalog : SHOP_CATALOG;
@@ -105,6 +106,15 @@ class ArenaProgression {
 
   /** Attach the QuestManager (owns !quest/!graveyard + lazy resolution). */
   attachQuests(questManager) { this._quests = questManager; }
+
+  /** Mirror a broadcast event to the overlay ticker ('@' is chat-only). */
+  _ticker(category, text) {
+    try {
+      this._onTicker(category, String(text).replace(/@/g, ''));
+    } catch (err) {
+      this._logger.error('[ArenaProgression] ticker emit error:', err);
+    }
+  }
 
   // ── Character sheet lifecycle ───────────────────────────────────────────────
 
@@ -380,7 +390,12 @@ class ArenaProgression {
 
   // ── Duel results (called by arena.js when a duel finishes) ──────────────────
 
-  async recordDuelResult(winnerUsername, loserUsername, channel) {
+  /**
+   * Apply and persist a duel result. Returns the rewards summary so the arena
+   * can fold it into its single result chat line (slim narration). With
+   * announce=true (full narration) the classic separate rewards line is sent.
+   */
+  async recordDuelResult(winnerUsername, loserUsername, channel, { announce = true } = {}) {
     try {
       const [{ sheet: win }, { sheet: lose }] = await Promise.all([
         this.getSheet(winnerUsername),
@@ -400,13 +415,22 @@ class ArenaProgression {
 
       await Promise.all([this._sync(winnerUsername), this._sync(loserUsername)]);
 
-      const winReady = win.xp >= xpForNextLevel(win.level) ? ' Ready to !levelup!' : '';
-      this._twitch.say(channel,
-        `${mention(winnerUsername)} earns ${XP_WIN} XP and ${GOLD_WIN} gold (${win.xp}/${xpForNextLevel(win.level)} XP).${winReady} ` +
-        `${mention(loserUsername)} earns ${XP_LOSS} XP and ${GOLD_LOSS} gold for the effort.`
-      );
+      const winnerReady = win.xp >= xpForNextLevel(win.level);
+      if (announce) {
+        const winReady = winnerReady ? ' Ready to !levelup!' : '';
+        this._twitch.say(channel,
+          `${mention(winnerUsername)} earns ${XP_WIN} XP and ${GOLD_WIN} gold (${win.xp}/${xpForNextLevel(win.level)} XP).${winReady} ` +
+          `${mention(loserUsername)} earns ${XP_LOSS} XP and ${GOLD_LOSS} gold for the effort.`
+        );
+      }
+      return {
+        xpWin: XP_WIN, goldWin: GOLD_WIN,
+        xpLoss: XP_LOSS, goldLoss: GOLD_LOSS,
+        winnerReady,
+      };
     } catch (err) {
       this._logger.error('[ArenaProgression] recordDuelResult error:', err);
+      return null;
     }
   }
 
@@ -521,10 +545,12 @@ class ArenaProgression {
 
     const a = sheet.abilities;
     const legacyNote = perks.length ? ` (${perks.join(', ')})` : '';
-    this._twitch.say(channel,
+    const msg =
       `⚰️✨ ${mention(username)} is REBORN as a ${sheet.class}! ` +
       `STR ${a.str} DEX ${a.dex} CON ${a.con} INT ${a.int} WIS ${a.wis} CHA ${a.cha} — ` +
-      `${sheet.gold} starting gold${legacyNote}. A new legend begins!`);
+      `${sheet.gold} starting gold${legacyNote}. A new legend begins!`;
+    this._twitch.say(channel, msg);
+    this._ticker('levelup', msg);
     return sheet;
   }
 
@@ -686,9 +712,12 @@ class ArenaProgression {
     await this._sync(username);
 
     const combat = this.combatStats(sheet);
-    this._twitch.say(channel,
+    // One completed-event chat line; the ticker mirrors it for the overlay.
+    const msg =
       `🎉 ${mention(username)} is now a Level ${sheet.level} ${sheet.class}! ` +
-      `+1 ${primary.toUpperCase()}, +1 ${bonus.toUpperCase()} — HP ${combat.maxHp} AC ${combat.ac} ATK +${combat.atkBonus}.`);
+      `+1 ${primary.toUpperCase()}, +1 ${bonus.toUpperCase()} — HP ${combat.maxHp} AC ${combat.ac} ATK +${combat.atkBonus}.`;
+    this._twitch.say(channel, msg);
+    this._ticker('levelup', msg);
   }
 
   async _handleLeaderboard(channel, username) {
@@ -718,9 +747,11 @@ class ArenaProgression {
 
   _announceNewCharacter(channel, username, sheet) {
     const a = sheet.abilities;
-    this._twitch.say(channel,
+    const msg =
       `🎲 ${mention(username)} rolls a new arena character: ${sheet.class}! ` +
-      `STR ${a.str} DEX ${a.dex} CON ${a.con} INT ${a.int} WIS ${a.wis} CHA ${a.cha} — ${sheet.gold} starting gold.`);
+      `STR ${a.str} DEX ${a.dex} CON ${a.con} INT ${a.int} WIS ${a.wis} CHA ${a.cha} — ${sheet.gold} starting gold.`;
+    this._twitch.say(channel, msg);
+    this._ticker('levelup', msg);
   }
 }
 
