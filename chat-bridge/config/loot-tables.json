@@ -9,6 +9,34 @@
     { "item": "Wand of Fireballs",       "weight": 2  }
   ],
 
+  "_comment_gift": "Gift-sub tiers reward the GIFTER by batch size (highest min_count ≤ count wins). Recipients never roll.",
+  "gift": [
+    {
+      "min_count": 10,
+      "table": [
+        { "item": "Legendary Artifact Fragment", "weight": 40 },
+        { "item": "Wand of Fireballs",           "weight": 35 },
+        { "item": "Dragon Scale Shield",         "weight": 25 }
+      ]
+    },
+    {
+      "min_count": 5,
+      "table": [
+        { "item": "Potion of Superior Healing",  "weight": 50 },
+        { "item": "Bag of Tricks",               "weight": 30 },
+        { "item": "Cloak of Elvenkind",          "weight": 20 }
+      ]
+    },
+    {
+      "min_count": 1,
+      "table": [
+        { "item": "Potion of Healing",           "weight": 60 },
+        { "item": "Scroll of Magic Missile",     "weight": 25 },
+        { "item": "Thieves' Tools",              "weight": 15 }
+      ]
+    }
+  ],
+
   "raid": [
     { "item": "Raider's War Banner",     "weight": 60 },
     { "item": "Horn of Blasting",        "weight": 30 },

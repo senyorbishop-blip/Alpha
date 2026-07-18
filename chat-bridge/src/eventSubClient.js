@@ -18,7 +18,7 @@ const HELIX_BASE = 'https://api.twitch.tv/helix';
  *
  * Emits events via registered handlers:
  *   on('sub',     { username, displayName, months, gifted })
- *   on('giftsub', { username, displayName, total })   — the GIFTER of a batch
+ *   on('giftsub', { username, displayName, total, anonymous }) — the GIFTER of a batch
  *   on('bits',    { username, displayName, amount, message })
  *   on('raid',    { fromUsername, fromDisplayName, viewers })
  */
@@ -129,7 +129,8 @@ class EventSubClient {
       case 'channel.subscribe':
       case 'channel.subscription.message': {
         // channel.subscribe also fires once per gift RECIPIENT (is_gift=true);
-        // they get a normal sub reward tagged as gifted.
+        // the handler must NOT roll rewards for those — the gifter's
+        // channel.subscription.gift batch event carries the reward.
         const username = String(event.user_login ?? '').toLowerCase();
         const displayName = event.user_name ?? username;
         const months = event.cumulative_months ?? event.streak_months ?? 1;
@@ -140,14 +141,18 @@ class EventSubClient {
         // Fires once per gift BATCH from the gifter's perspective. The payload
         // has no recipient info — recipients arrive as channel.subscribe
         // events with is_gift=true. `total` is the batch size (gift tiers).
-        const gifterUsername = String(event.user_login ?? '').toLowerCase();
-        const gifterDisplay = event.user_name ?? gifterUsername;
+        // Anonymous batches have is_anonymous=true and null user fields; the
+        // handler decides how to treat them (skip/bank per config).
+        const anonymous = !!event.is_anonymous;
+        const gifterUsername = anonymous ? '' : String(event.user_login ?? '').toLowerCase();
+        const gifterDisplay = anonymous ? 'An Anonymous Gifter' : (event.user_name ?? gifterUsername);
         const total = Number(event.total ?? 1) || 1;
-        if (event.is_anonymous || !gifterUsername) break;
+        if (!anonymous && !gifterUsername) break;
         this._emit('giftsub', {
           username: gifterUsername,
           displayName: gifterDisplay,
           total,
+          anonymous,
         });
         break;
       }

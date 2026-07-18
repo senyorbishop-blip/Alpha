@@ -11,6 +11,8 @@ This project currently uses a practical founder-beta version format:
 ## [Unreleased]
 
 ### Fixed
+- Gifted subs no longer reward the recipients instead of the gifter. Twitch fires `channel.subscribe` (with `is_gift=true`) once per recipient plus one `channel.subscription.gift` batch event for the gifter; the bridge was rolling sub rewards on the recipient events. Now only genuine self-subs/resubs roll the single-sub table, the **gifter** rolls once from the gift-count tier (×1/×5/×10) matching the batch size, and recipients get at most one collective welcome line per batch ("Welcome to the 5 new tavern patrons — type !join to play!") — never per-recipient messages or items. A resub renewal that arrives as both the subscribe and resub-message events also rolls exactly once.
+- Anonymous gift batches (previously dropped silently) now get a chat thank-you to "an anonymous hero" with no reward roll by default; a `"bank"` mode holds the roll for the gifter to claim if they de-anonymize (`chat-bridge/config/stream.json` → `gifts.anonymous_mode`).
 - Mid-session player desync (stale state until manual relaunch): a socket whose send failed or timed out was removed from the broadcast registry but never closed, so the client's browser kept an OPEN-looking dead socket, `onclose` never fired, and auto-reconnect never ran. Fixed with three defense layers:
   - Reaped sockets are now explicitly closed (code 1011) so the client immediately notices and reconnects via the cheap delta-reconnect path.
   - Every server push now carries a per-connection monotonic `seq`; the client detects a missed push (seq gap) and silently repairs via a `request_state` delta resync (gap events are logged server-side as `seq_gap_resync`).
@@ -18,6 +20,7 @@ This project currently uses a practical founder-beta version format:
 - The per-send timeout now scales with frame size (assumed 128 KiB/s throughput floor, capped at 30s), so a large state sync over a slow-but-alive connection is no longer reaped as if the socket were wedged.
 
 ### Added
+- Optional cumulative gift tiers (`gifts.cumulative` in `chat-bridge/config/stream.json`, default off): gift rewards tier by the gifter's session-total gifts, so 3 gifts then 2 gifts crosses the ×5 tier on the second batch. Local fallback `gift` tier tables (×1/×5/×10 by `min_count`) were added to `chat-bridge/config/loot-tables.json`, and the mock REPL gained `/resub <user>` (double-event renewal dedup check) and `/giftsub anon <n>` (anonymous batch).
 - Overlay event ticker: a rolling play-by-play feed (last ~5 lines, newest on top, ~8s fade, burst pacing) built into the Game Overlay browser source and also available as its own "Event Ticker" browser-source URL in the Stream panel. It carries duel round-by-round narration, quest departures/returns, reward rolls, level-ups, deaths, DM item grants, and chat item uses. Events carry server-stamped seq numbers so the overlay shows a "missed events" marker instead of silently dropping lines; the DM's arena quiet mode queues ticker events along with the chat announcements.
 
 ### Changed

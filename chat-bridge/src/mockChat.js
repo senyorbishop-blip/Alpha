@@ -119,7 +119,9 @@ Mock chat mode — commands:
   <username>: <message>   simulate a chat line, e.g.  alice: !join
   <message>               bare messages come from "testuser", e.g.  !join
   /sub <user> [months]    simulate a subscription (months > 1 = resub)
-  /giftsub <gifter> <n>   simulate <n> gifted subs from <gifter>
+  /resub <user> [months]  simulate a resub whose renewal arrives as BOTH the
+                          subscribe and message events (dedup check: one roll)
+  /giftsub <gifter> <n>   simulate <n> gifted subs from <gifter> ("anon" = anonymous)
   /bits <user> <amount>   simulate a cheer
   /raid <user> <viewers>  simulate an incoming raid
   /spam <n>               fire n random commands from n fake users rapidly
@@ -179,20 +181,33 @@ function startMockRepl({ twitchClient, eventSubClient, logger, onQuit }) {
         break;
       }
 
+      case '/resub': {
+        const user = args[0];
+        if (!user) { console.log('usage: /resub <user> [months]'); break; }
+        const months = Math.max(2, parseInt(args[1], 10) || 2);
+        // Same renewal delivered as BOTH channel.subscribe and
+        // channel.subscription.message — the handler must roll only once.
+        fireSub(user, { months });
+        fireSub(user, { months });
+        break;
+      }
+
       case '/giftsub': {
         const gifter = args[0];
         const count = Math.max(1, parseInt(args[1], 10) || 1);
-        if (!gifter) { console.log('usage: /giftsub <gifter> <count>'); break; }
+        if (!gifter) { console.log('usage: /giftsub <gifter|anon> <count>'); break; }
         // Mirrors real EventSub: one 'giftsub' batch event for the gifter,
-        // plus a gifted 'sub' event per recipient.
+        // plus a gifted 'sub' event per recipient (recipients never roll).
+        const anonymous = /^anon(ymous)?$/i.test(gifter);
         eventSubClient.emit('giftsub', {
-          username: gifter.toLowerCase(),
-          displayName: gifter,
+          username: anonymous ? '' : gifter.toLowerCase(),
+          displayName: anonymous ? 'An Anonymous Gifter' : gifter,
           total: count,
+          anonymous,
         });
         for (let i = 0; i < count; i++) {
           const recipient = FAKE_USERS[i % FAKE_USERS.length];
-          fireSub(recipient, { gifted: true, gifterDisplay: gifter });
+          fireSub(recipient, { gifted: true, gifterDisplay: anonymous ? null : gifter });
         }
         break;
       }

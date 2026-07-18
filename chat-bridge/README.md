@@ -27,7 +27,9 @@ mock> alice: !join
 [BOT→chat] Alice has entered the tavern! Type !inventory to see your items.
 mock> !inventory
 mock> /sub alice          # simulate a subscription (same handler as real EventSub)
-mock> /giftsub bob 5      # bob gifts 5 subs
+mock> /resub alice 4      # resub arriving as BOTH subscribe+message events (rolls once)
+mock> /giftsub bob 5      # bob gifts 5 subs — bob rolls the x5 tier, recipients don't roll
+mock> /giftsub anon 5     # anonymous gift batch (no roll by default)
 mock> /bits carol 500     # carol cheers 500 bits
 mock> /raid dan 20        # dan raids with 20 viewers
 mock> /spam 25            # 25 rapid commands from fake users — exercises rate limiting
@@ -150,11 +152,34 @@ Give Potion, …), persist per campaign on the server, and the bridge fetches
 them at startup and re-applies them live whenever the DM saves changes — no
 restart or JSON editing needed. Defaults ship pre-filled:
 
-- **Single sub / resub** (and each gift recipient) → a "basic" support table
-  (heals + potions).
-- **Gift subs** → the *gifter* rolls from tiers by batch size (×1, ×5, ×10+ —
-  the top tier includes every power).
+- **Single sub / resub** → a "basic" support table (heals + potions). Only
+  genuine self-subs and resubs roll — a renewal that arrives as both the
+  subscribe and resub-message events still rolls exactly once.
+- **Gift subs** → the **gifter** rolls from tiers by batch size (×1, ×5, ×10+ —
+  the top tier includes every power). Gift **recipients never roll**: at most,
+  recipients who haven't `!join`-ed get one collective welcome line per batch
+  ("Welcome to the 5 new tavern patrons — type !join to play!") — never
+  per-recipient messages or items.
 - **Bits** → threshold tiers (100 / 500 / 1000+).
+
+Gift-sub handling is tunable in `config/stream.json`:
+
+```json
+{
+  "gifts": {
+    "anonymous_mode": "skip",
+    "cumulative": false,
+    "welcome_recipients": true
+  }
+}
+```
+
+- `anonymous_mode` — `"skip"` (default): anonymous gift batches roll nothing
+  and chat gets a thank-you to "an anonymous hero"; `"bank"`: the roll is held
+  in memory for the gifter to claim if they de-anonymize during the session.
+- `cumulative` — when `true`, gift tiers use the gifter's session-total gifts,
+  so 3 gifts then 2 gifts crosses the ×5 tier on the second batch. Default off.
+- `welcome_recipients` — set `false` to suppress the collective welcome line.
 
 **Fallback: local JSON.** When the server has no rewards config (or the fetch
 fails), the bridge falls back to `config/loot-tables.json` item tables. Each
@@ -167,7 +192,7 @@ entry has a `weight` (higher = more common):
 ]
 ```
 
-Bits tiers are configured as an array with `threshold` values — the highest threshold the bit amount meets is used. Raid loot always comes from the local `raid` table.
+Bits tiers are configured as an array with `threshold` values — the highest threshold the bit amount meets is used. Gift-sub tiers work the same way with `min_count` values (the local `gift` tiers reward the gifter by batch size). Raid loot always comes from the local `raid` table.
 
 ---
 
