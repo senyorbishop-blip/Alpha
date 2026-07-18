@@ -267,7 +267,7 @@ def test_player_runtime_first_external_js_is_core_boot():
         "/static/js/state/store.js",
         "/static/js/core/runtime_bridge.js",
         "/static/js/core/boot_shell.js",
-        "/static/js/core/ws.js?v=heartbeat-pong-v5-stream-readiness",
+        "/static/js/core/ws.js?v=heartbeat-pong-v6-seq-gap-watchdog",
         "/static/js/core/message_dispatch.js",
     ]:
         assert core in scripts, core

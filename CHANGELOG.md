@@ -10,6 +10,13 @@ This project currently uses a practical founder-beta version format:
 
 ## [Unreleased]
 
+### Fixed
+- Mid-session player desync (stale state until manual relaunch): a socket whose send failed or timed out was removed from the broadcast registry but never closed, so the client's browser kept an OPEN-looking dead socket, `onclose` never fired, and auto-reconnect never ran. Fixed with three defense layers:
+  - Reaped sockets are now explicitly closed (code 1011) so the client immediately notices and reconnects via the cheap delta-reconnect path.
+  - Every server push now carries a per-connection monotonic `seq`; the client detects a missed push (seq gap) and silently repairs via a `request_state` delta resync (gap events are logged server-side as `seq_gap_resync`).
+  - Server→client heartbeat now every 20s, and the client closes + reconnects on its own if no server traffic of any kind arrives for 45s (background-tab-throttling safe).
+- The per-send timeout now scales with frame size (assumed 128 KiB/s throughput floor, capped at 30s), so a large state sync over a slow-but-alive connection is no longer reaped as if the socket were wedged.
+
 ### Added
 - The game server now auto-starts the Twitch chat bridge as a supervised child process — no manual `npm start`. It spawns when a session has a connected Twitch channel with the chat bridge enabled, restarts crashed bridges with capped exponential backoff (marked failed after 5 retries), pipes bridge output into the server log with a `[chat-bridge]` prefix, and cleanly terminates the process tree (Windows-safe) on toggle-off, Twitch disconnect, or server shutdown.
 - Stream panel bridge status now shows running / starting / failed (with the last error line) / stopped, a recent-bridge-log view, and a "Restart bridge" button. A clear panel error appears when Node.js is not installed.

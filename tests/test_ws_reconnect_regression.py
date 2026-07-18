@@ -10,7 +10,7 @@ COMBAT = ROOT / "server/handlers/combat.py"
 
 def test_ws_core_logs_version_and_ping_pong_flow():
     src = WS.read_text(encoding="utf-8")
-    assert "heartbeat-pong-v5-stream-readiness" in src
+    assert "heartbeat-pong-v6-seq-gap-watchdog" in src
     assert "console.info('[WS] core loaded version', CORE_WS_VERSION);" in src
     assert "wsDebugLog('[WS] received ping');" in src
     assert "wsDebugLog('[WS] sent pong');" in src
@@ -30,7 +30,7 @@ def test_server_logs_pong_and_updates_last_seen_for_any_frame():
 
 def test_play_loads_ws_with_cache_busting_and_no_inline_websocket_bypass():
     src = PLAY.read_text(encoding="utf-8")
-    assert '<script src="/static/js/core/ws.js?v=heartbeat-pong-v5-stream-readiness"></script>' in src
+    assert '<script src="/static/js/core/ws.js?v=heartbeat-pong-v6-seq-gap-watchdog"></script>' in src
     assert "new WebSocket" not in src
     ping_case = src[src.index("case 'ping': {"):src.index("case 'user_joined': {", src.index("case 'ping': {"))]
     assert "Transport heartbeat pongs are handled in core/ws.js" in ping_case

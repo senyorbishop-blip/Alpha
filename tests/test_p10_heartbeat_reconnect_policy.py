@@ -20,7 +20,10 @@ WS = ROOT / "client" / "static" / "js" / "core" / "ws.js"
 def test_default_policy_requires_two_ping_windows_before_timeout():
     policy = HeartbeatPolicy()
 
-    assert policy.ping_interval_seconds == 30.0
+    # 20s ping interval: at least two server→client pings must fit inside the
+    # client's 45s no-traffic watchdog window (ws.js), so a quiet-but-healthy
+    # session never trips a false client-side reconnect.
+    assert policy.ping_interval_seconds == 20.0
     assert policy.timeout_seconds == 60.0
     assert policy.is_valid()
     assert policy.timeout_seconds >= policy.ping_interval_seconds * 2
@@ -74,7 +77,7 @@ def test_server_receive_loop_refreshes_liveness_before_pong_skip():
 def test_server_heartbeat_timeout_stays_tolerant_not_aggressive():
     src = MAIN.read_text(encoding="utf-8")
 
-    assert "ping_interval: float = 30" in src
+    assert "ping_interval: float = 20" in src
     assert "pong_timeout: float = 60" in src
     assert "Heartbeat timeout" in src
     assert 'await connection_manager.send_to(session_id, user_id, {"type": "ping"})' in src

@@ -150,6 +150,26 @@
         storeSet('socket.connected', false);
         storeSet('socket.status', 'disconnected');
       },
+      onSeqGap: function (gap) {
+        // A missed push means local state may be silently stale even though
+        // the socket is healthy. Repair through the same delta path a socket
+        // reopen uses: request_state with known per-domain revisions, so the
+        // server only resends the domains that actually changed. Invisible to
+        // the player — no reconnect, no reload.
+        let knownRevisions;
+        try {
+          if (typeof global.collectKnownStateRevisions === 'function') knownRevisions = global.collectKnownStateRevisions();
+        } catch (_err) { knownRevisions = undefined; }
+        const payload = {
+          reason: 'seq_gap',
+          seq_gap: { expected: gap && gap.expected, received: gap && gap.received },
+        };
+        if (knownRevisions && Object.keys(knownRevisions).length) payload.known_revisions = knownRevisions;
+        if (global.liveDebugLog) global.liveDebugLog('websocket seq gap/request_state', payload.seq_gap);
+        console.warn('[WS] seq gap — requesting delta state resync', payload.seq_gap);
+        if (global.AppWS && typeof global.AppWS.send === 'function') global.AppWS.send({ type: 'request_state', payload });
+        else if (typeof global.sendWS === 'function') global.sendWS({ type: 'request_state', payload });
+      },
       onCloseExpired: function () {
         const status = global.document.getElementById('ws-status');
         if (status) {

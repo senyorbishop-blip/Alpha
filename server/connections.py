@@ -42,6 +42,20 @@ def _payload_log_allowed(session_id: str, message_type: str) -> bool:
 DEFAULT_SEND_TIMEOUT_SECONDS = 10.0
 MIN_SEND_TIMEOUT_SECONDS = 1.0
 
+# Large frames get proportionally more time on top of the flat base timeout.
+# A flat 10s budget sized for small frames would reap a healthy-but-slow
+# client mid state_sync: at ~128 KiB/s of sustained goodput (a mediocre
+# residential link) a 1 MiB frame needs ~8s of pure transfer time before any
+# RTT/scheduling slack. The extra allowance is capped well under the 60s
+# heartbeat timeout so a wedged socket is still reaped promptly.
+SEND_TIMEOUT_THROUGHPUT_FLOOR_BYTES_PER_S = 128 * 1024
+MAX_SEND_TIMEOUT_SECONDS = 30.0
+
+# Bound for the best-effort close of a reaped socket. Closing a wedged
+# transport can itself hang, and the close runs inside the broadcast path,
+# so it must never stall live sync for the healthy recipients.
+REAP_CLOSE_TIMEOUT_SECONDS = 3.0
+
 
 def send_timeout_seconds() -> float:
     raw = os.environ.get("WS_SEND_TIMEOUT_SECONDS")
@@ -52,6 +66,20 @@ def send_timeout_seconds() -> float:
     except Exception:
         return DEFAULT_SEND_TIMEOUT_SECONDS
     return max(MIN_SEND_TIMEOUT_SECONDS, value)
+
+
+def send_timeout_seconds_for(byte_size: int) -> float:
+    """Per-send timeout scaled by frame size (see the throughput-floor note above).
+
+    An operator-configured base above the cap is always respected — the cap only
+    limits the size-based extension, never shrinks an explicit override.
+    """
+    base = send_timeout_seconds()
+    try:
+        extra = max(0.0, float(byte_size)) / SEND_TIMEOUT_THROUGHPUT_FLOOR_BYTES_PER_S
+    except Exception:
+        extra = 0.0
+    return max(base, min(MAX_SEND_TIMEOUT_SECONDS, base + extra))
 
 
 def _socket_is_open(websocket) -> bool:
@@ -75,6 +103,11 @@ class ConnectionManager:
         self._connections: Dict[str, Dict[str, WebSocket]] = {}
         self._connection_ids: Dict[str, Dict[str, str]] = {}
         self._roles: Dict[str, Dict[str, str]] = {}
+        # Per-connection outbound sequence numbers (reset whenever a user's
+        # socket is (re)established). Every pushed frame carries the next value
+        # so the client can detect a missed push (a reaped-then-reconnected or
+        # otherwise lossy window) and repair via the request_state delta path.
+        self._send_seqs: Dict[str, Dict[str, int]] = {}
 
     def get_session_connections(self, session_id: str) -> Dict[str, WebSocket]:
         return self._connections.get(session_id, {})
@@ -115,6 +148,9 @@ class ConnectionManager:
         self._connections[session_id][user_id] = websocket
         self._connection_ids[session_id][user_id] = new_connection_id
         self._roles[session_id][user_id] = role or "unknown"
+        # Fresh socket ⇒ fresh outbound seq stream. The client resets its own
+        # tracker per socket, so the first push on any connection is seq 1.
+        self._send_seqs.setdefault(session_id, {})[user_id] = 0
         logger.info(
             "[ws] connected session_id=%s user_id=%s role=%s connection_id=%s "
             "client_socket_id=%s reason=%s old_socket_replaced=%s new_socket_connected=true",
@@ -138,6 +174,10 @@ class ConnectionManager:
                 self._roles[session_id].pop(user_id, None)
                 if not self._roles[session_id]:
                     del self._roles[session_id]
+            if session_id in self._send_seqs:
+                self._send_seqs[session_id].pop(user_id, None)
+                if not self._send_seqs[session_id]:
+                    del self._send_seqs[session_id]
             if not self._connections[session_id]:
                 del self._connections[session_id]
             return True
@@ -159,6 +199,71 @@ class ConnectionManager:
     def _encode_payload(self, message: dict) -> tuple[str, int]:
         payload = json.dumps(message)
         return payload, len(payload.encode("utf-8"))
+
+    def _next_seq(self, session_id: str, user_id: str) -> int:
+        seqs = self._send_seqs.setdefault(session_id, {})
+        seqs[user_id] = int(seqs.get(user_id, 0)) + 1
+        return seqs[user_id]
+
+    def _stamp_seq_payload(self, payload: str, byte_size: int, seq: int) -> tuple[str, int]:
+        """Splice a per-connection ``seq`` into an already-encoded frame.
+
+        Broadcast paths intentionally ``json.dumps`` a shared payload once; the
+        seq differs per recipient, so it is inserted into the encoded string
+        instead of re-serializing the (potentially multi-hundred-KB) message
+        for every recipient. The suffix is pure ASCII, so the UTF-8 byte size
+        grows by exactly ``len(suffix) - 1`` (the replaced ``}``).
+        """
+        if not payload.endswith("}"):
+            return payload, byte_size
+        suffix = ("," if len(payload) > 2 else "") + '"seq":%d}' % seq
+        return payload[:-1] + suffix, byte_size + len(suffix) - 1
+
+    def _seq_stamped_send(
+        self,
+        session_id: str,
+        user_id: str,
+        ws: WebSocket,
+        payload: str,
+        byte_size: int,
+        *,
+        role: str,
+        message_type: str,
+    ):
+        """Build one recipient's send coroutine with its seq stamped in."""
+        seq = self._next_seq(session_id, user_id)
+        stamped, stamped_size = self._stamp_seq_payload(payload, byte_size, seq)
+        return self._send_payload(
+            ws,
+            stamped,
+            session_id=session_id,
+            user_id=user_id,
+            role=role,
+            message_type=message_type,
+            byte_size=stamped_size,
+        )
+
+    async def _close_reaped(self, session_id: str, user_id: str, ws: WebSocket) -> None:
+        """Best-effort close of a socket reaped after a failed/timed-out send.
+
+        Without this the client's browser still sees an OPEN socket: its
+        ``onclose`` never fires, auto-reconnect never runs, and the player
+        silently receives nothing until a manual relaunch. Closing (1011 —
+        internal error) makes the client notice and reconnect via the cheap
+        delta path. Both the close and any error are swallowed: the socket is
+        usually already dead, and a wedged close must not stall the broadcast
+        that reaped it.
+        """
+        try:
+            await asyncio.wait_for(
+                ws.close(code=1011, reason="Server send failed"),
+                timeout=REAP_CLOSE_TIMEOUT_SECONDS,
+            )
+        except Exception as exc:
+            logger.debug(
+                "[ws] reaped socket close failed session_id=%s user_id=%s error=%r",
+                session_id, user_id, exc,
+            )
 
     def _log_send_diagnostic(
         self,
@@ -220,8 +325,11 @@ class ConnectionManager:
     ) -> None:
         started = time.perf_counter()
         timed_out = False
+        # Scaled by frame size so a large-but-progressing sync over a mediocre
+        # link is not reaped as if it were a wedged socket.
+        timeout_s = send_timeout_seconds_for(byte_size)
         try:
-            await asyncio.wait_for(ws.send_text(payload), timeout=send_timeout_seconds())
+            await asyncio.wait_for(ws.send_text(payload), timeout=timeout_s)
         except asyncio.TimeoutError:
             # The socket is wedged (half-open TCP / unresponsive peer). Surface it
             # as a send failure so the caller reaps the connection instead of
@@ -235,7 +343,7 @@ class ConnectionManager:
                     "[ws] outbound_send_timeout message_type=%s session_id=%s recipient_user_id=%s "
                     "recipient_role=%s byte_size=%s duration_ms=%.2f timeout_s=%.2f",
                     message_type or "unknown", session_id, user_id, role or "unknown",
-                    byte_size, duration_ms, send_timeout_seconds(),
+                    byte_size, duration_ms, timeout_s,
                 )
             self._log_send_diagnostic(
                 session_id=session_id, user_id=user_id, role=role,
@@ -268,19 +376,22 @@ class ConnectionManager:
                 if _payload_log_allowed(session_id, str(message.get("type") or "unknown") + ":breakdown"):
                     log_top_level_payload_keys(logger, session_id=session_id, recipient_user_id=user_id, recipient_role=self._role_for(session_id, user_id), message=message, byte_size=byte_size)
                     self._log_deflate_estimate(session_id, user_id, str(message.get("type") or "unknown"), payload, byte_size)
-                await self._send_payload(
+                await self._seq_stamped_send(
+                    session_id,
+                    user_id,
                     ws,
                     payload,
-                    session_id=session_id,
-                    user_id=user_id,
+                    byte_size,
                     role=self._role_for(session_id, user_id),
                     message_type=str(message.get("type") or "unknown"),
-                    byte_size=byte_size,
                 )
                 return True
             except Exception:
                 logger.warning("[ws] send_to failed session_id=%s user_id=%s message_type=%s", session_id, user_id, message.get("type"))
                 self.disconnect(session_id, user_id, ws)
+                # Close the dead socket so the client's onclose fires and its
+                # auto-reconnect kicks in — otherwise it stays silently stale.
+                await self._close_reaped(session_id, user_id, ws)
         return False
 
     async def _gather_sends(self, session_id: str, sends: list) -> None:
@@ -292,7 +403,9 @@ class ConnectionManager:
         every other client's live sync. Each coroutine is already bounded by the
         per-send timeout in ``_send_payload``; any that fail (timeout, transport
         error) have their socket removed from the registry so the next broadcast
-        skips them.
+        skips them, and are then explicitly closed — a reaped-but-never-closed
+        socket looks OPEN to the browser, so its onclose/auto-reconnect never
+        fires and the player silently stops receiving updates.
         """
         if not sends:
             return
@@ -303,20 +416,21 @@ class ConnectionManager:
                 raise result
             if isinstance(result, BaseException):
                 self.disconnect(session_id, uid, ws)
+                await self._close_reaped(session_id, uid, ws)
 
     async def broadcast(self, session_id: str, message: dict, exclude_user: Optional[str] = None):
         connections = dict(self._connections.get(session_id, {}))
         payload, byte_size = self._encode_payload(message)
         message_type = str(message.get("type") or "unknown")
         sends = [
-            (uid, ws, self._send_payload(
+            (uid, ws, self._seq_stamped_send(
+                session_id,
+                uid,
                 ws,
                 payload,
-                session_id=session_id,
-                user_id=uid,
+                byte_size,
                 role=self._role_for(session_id, uid),
                 message_type=message_type,
-                byte_size=byte_size,
             ))
             for uid, ws in connections.items()
             if uid != exclude_user
@@ -331,14 +445,14 @@ class ConnectionManager:
         for uid, ws in connections.items():
             user = session_obj.users.get(uid)
             if user and user.role in roles:
-                sends.append((uid, ws, self._send_payload(
+                sends.append((uid, ws, self._seq_stamped_send(
+                    session_id,
+                    uid,
                     ws,
                     payload,
-                    session_id=session_id,
-                    user_id=uid,
+                    byte_size,
                     role=self._role_for(session_id, uid, session_obj=session_obj),
                     message_type=message_type,
-                    byte_size=byte_size,
                 )))
         await self._gather_sends(session_id, sends)
 
@@ -368,26 +482,26 @@ class ConnectionManager:
                 if token and token.get("hidden"):
                     alt_message = {"type": "token_removed_hidden", "payload": {"id": token["id"]}}
                     alt, alt_byte_size = self._encode_payload(alt_message)
-                    sends.append((uid, ws, self._send_payload(
+                    sends.append((uid, ws, self._seq_stamped_send(
+                        session_id,
+                        uid,
                         ws,
                         alt,
-                        session_id=session_id,
-                        user_id=uid,
+                        alt_byte_size,
                         role=self._role_for(session_id, uid, session_obj=session_obj),
                         message_type="token_removed_hidden",
-                        byte_size=alt_byte_size,
                     )))
                     continue
                 # Note: tokens without owner_id are DM-created NPCs and ARE
                 # visible to players (unless hidden=True, handled above).
-            sends.append((uid, ws, self._send_payload(
+            sends.append((uid, ws, self._seq_stamped_send(
+                session_id,
+                uid,
                 ws,
                 dm_payload,
-                session_id=session_id,
-                user_id=uid,
+                dm_byte_size,
                 role=self._role_for(session_id, uid, session_obj=session_obj),
                 message_type=message_type,
-                byte_size=dm_byte_size,
             )))
         await self._gather_sends(session_id, sends)
 
