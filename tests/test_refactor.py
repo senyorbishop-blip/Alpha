@@ -2454,18 +2454,11 @@ def test_approval_consumes_no_cooldown_power():
     assert pending_id not in session.viewer_pending_actions
 
 
-def test_knockback_target_mode_in_play_html():
-    """play.html knockback definition must use target_mode:'point' (not 'token')."""
-    import re
-    content = _play_html_content()
-    # Find the knockback entry in viewerPowerDefs
-    m = re.search(r"knockback:\s*\{[^}]+\}", content)
-    assert m, "knockback entry not found in viewerPowerDefs"
-    entry_text = m.group(0)
-    assert "target_mode:'point'" in entry_text, (
-        f"knockback must use target_mode:'point' but got: {entry_text}"
-    )
-    assert "target_mode:'token'" not in entry_text
+def test_knockback_target_mode_is_point():
+    """Knockback must target a point (not a token). The client renders defs
+    straight from the server catalog, so the server def is the authority."""
+    from server.handlers.viewer_powers import VIEWER_BASE_POWER_DEFS
+    assert VIEWER_BASE_POWER_DEFS["knockback"]["target_mode"] == "point"
 
 
 def test_knockback_map_targeting_sends_target_token_id_in_play_html():
@@ -2831,36 +2824,35 @@ def test_token_emote_handler_enforces_cooldown(monkeypatch):
     assert denied[-1][2]["payload"]["cooldown_remaining_ms"] > 0
 
 
-def test_viewer_powers_js_defs_match_server():
-    """viewer_powers.js base power defs must include all server-defined VIEWER_BASE_POWER_DEFS."""
-    from server.handlers.viewer_powers import VIEWER_BASE_POWER_DEFS
+def test_viewer_powers_js_defs_are_server_driven():
+    """viewer_powers.js must render power defs from the server-synced catalog
+    (state_sync / viewer_power_catalog_sync) — never from a hardcoded base
+    object, which would silently desync every future power."""
     js_path = os.path.join(PROJECT_ROOT, "client", "static", "js", "gameplay", "viewer_powers.js")
     with open(js_path, "r", encoding="utf-8") as f:
         js_source = f.read()
-    missing = []
-    for power_id in VIEWER_BASE_POWER_DEFS:
-        # Each power id must appear in the JS base defs object
-        if power_id + ":" not in js_source:
-            missing.append(power_id)
-    assert not missing, (
-        f"viewer_powers.js is missing server-defined power(s): {missing}. "
-        "Update the base object in viewerPowerDefs() to match VIEWER_BASE_POWER_DEFS."
+    assert "env.viewerPowerCatalog" in js_source
+    assert "name:'Pebble Toss'" not in js_source, (
+        "viewer_powers.js has grown a hardcoded power def again — power lists "
+        "must come from the server catalog (VIEWER_POWER_DEFS)."
     )
 
 
-def test_play_html_viewer_power_defs_match_server():
-    """The live play.html grant dropdown must include every server base viewer power."""
-    from server.handlers.viewer_powers import VIEWER_BASE_POWER_DEFS
-
+def test_play_html_viewer_power_defs_are_server_driven():
+    """play.html (viewer panel + DM grant dropdown) must render power defs
+    from the server-synced catalog, never a hardcoded base object."""
     html_source = _play_html_content()
-    missing = []
-    for power_id in VIEWER_BASE_POWER_DEFS:
-        if f"{power_id}:" not in html_source:
-            missing.append(power_id)
-    assert not missing, (
-        f"play.html viewerPowerDefs() is missing server-defined power(s): {missing}. "
-        "Update the live viewerPowerDefs() base object so DMs can grant every base power."
+    assert "return { ...(viewerPowerCatalog || {}) };" in html_source
+    assert "name:'Pebble Toss'" not in html_source, (
+        "play.html has grown a hardcoded power def again — power lists must "
+        "come from the server catalog (VIEWER_POWER_DEFS)."
     )
+    # The full state snapshot delivers the merged catalog (shipped + custom)
+    from server.session import Session
+    session = Session(id="refactor-power-defs")
+    from server.handlers.viewer_powers import VIEWER_BASE_POWER_DEFS
+    catalog = session.to_state_dict()["viewer_power_catalog"]
+    assert set(VIEWER_BASE_POWER_DEFS.keys()) <= set(catalog.keys())
 
 
 def test_custom_power_builder_shows_save_for_status():

@@ -197,6 +197,40 @@ def _sub_power_catalog(session) -> list[dict]:
     return out
 
 
+# ── powers (broadcaster config page) ─────────────────────────────────────────────
+
+@router.get("/powers")
+async def powers_route(request: Request):
+    """All SKU-mapped known powers, unfiltered by the broadcaster's current
+    selection — the config page renders its toggle list from this so the
+    Extension never hardcodes power names. Names/descriptions come straight
+    from the server power defs (session-aware when the channel is bound)."""
+    if not ext_config.ext_configured():
+        return _not_configured(request)
+    try:
+        claims = verify_ext_jwt(_bearer(request))
+    except ExtJWTError as exc:
+        return _json(request, {"ok": False, "error": "unauthorized", "message": str(exc)}, status=401)
+    if claims.get("role") != "broadcaster":
+        return _json(request, {"ok": False, "error": "forbidden", "message": "Broadcaster role required."}, status=403)
+
+    channel_id = claims["channel_id"]
+    session_id = lookup_bound_session(channel_id)
+    session = get_session(session_id) if session_id else None
+    defs = _viewer_power_defs(session) if session is not None else dict(VIEWER_POWER_DEFS)
+    powers = [
+        {
+            "power_id": power_id,
+            "sku": sku,
+            "name": str(defs[power_id].get("name") or power_id),
+            "description": str(defs[power_id].get("description") or ""),
+        }
+        for sku, power_id in SKU_TO_POWER.items()
+        if power_id in defs
+    ]
+    return _json(request, {"ok": True, "channel_id": channel_id, "powers": powers})
+
+
 # ── transaction (viewer Bits purchase) ──────────────────────────────────────────
 
 @router.post("/transaction")

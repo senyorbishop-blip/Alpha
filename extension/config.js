@@ -11,9 +11,11 @@ const EBS_BASE = 'https://YOUR-EBS-DOMAIN';
 
 const twitch = window.Twitch ? window.Twitch.ext : null;
 
-// Mirror of the server SKU_TO_POWER map (server/twitch_ext/granting.py) so the
-// DM can select which known powers to offer. Keep ids in sync with the server.
-const POWERS = [
+// The toggle list is fetched from the EBS (GET /api/twitch/ext/powers), which
+// derives it from the server's power defs + SKU map — the single source of
+// truth. FALLBACK_POWERS only renders when the EBS is unreachable, so the
+// page stays usable offline; it does not need to be exhaustive.
+const FALLBACK_POWERS = [
   { power_id: 'pebble_toss', name: 'Pebble Toss' },
   { power_id: 'arcane_zap', name: 'Arcane Zap' },
   { power_id: 'healing_spark', name: 'Healing Spark' },
@@ -28,7 +30,16 @@ const POWERS = [
   { power_id: 'give_potion', name: 'Give Potion' },
   { power_id: 'chain_lightning', name: 'Chain Lightning' },
   { power_id: 'give_random_item', name: 'Give Random Item' },
+  { power_id: 'magic_missile', name: 'Magic Missile' },
+  { power_id: 'shield', name: 'Shield' },
+  { power_id: 'ray_of_frost', name: 'Ray of Frost' },
+  { power_id: 'sleep', name: 'Sleep' },
+  { power_id: 'lightning_bolt', name: 'Lightning Bolt' },
 ];
+
+// Populated from the EBS on load; starts as the fallback so the page renders
+// something immediately.
+let powerCatalog = FALLBACK_POWERS.slice();
 
 const state = { token: '', channelId: '' };
 const $ = (id) => document.getElementById(id);
@@ -40,19 +51,36 @@ function renderPowerToggles(selected) {
   const wrap = $('power-config');
   wrap.innerHTML = '';
   const chosen = new Set(selected || []);
-  POWERS.forEach((p) => {
+  powerCatalog.forEach((p) => {
     const id = `pc_${p.power_id}`;
     const row = document.createElement('label');
     row.className = 'config__power';
-    row.innerHTML = `<input type="checkbox" id="${id}" value="${p.power_id}" ${chosen.has(p.power_id) ? 'checked' : ''}/> <span>${p.name}</span>`;
+    if (p.description) row.title = p.description;
+    row.innerHTML = `<input type="checkbox" id="${id}" value="${p.power_id}" ${chosen.has(p.power_id) ? 'checked' : ''}/> <span></span>`;
+    row.querySelector('span').textContent = p.name || p.power_id;
     wrap.appendChild(row);
   });
 }
 
 function selectedPowers() {
-  return POWERS
+  return powerCatalog
     .map((p) => p.power_id)
     .filter((pid) => { const el = document.getElementById(`pc_${pid}`); return el && el.checked; });
+}
+
+/** Fetch the authoritative power list from the EBS (server power defs). */
+async function refreshPowerCatalog() {
+  if (!state.token) return;
+  try {
+    const resp = await fetch(`${EBS_BASE}/api/twitch/ext/powers`, {
+      headers: { 'Authorization': `Bearer ${state.token}` },
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (resp.ok && data.ok && Array.isArray(data.powers) && data.powers.length) {
+      powerCatalog = data.powers;
+      loadExisting(); // re-render toggles with the fresh list, keeping saved ticks
+    }
+  } catch (_) { /* keep the fallback list */ }
 }
 
 if (twitch) {
@@ -61,6 +89,7 @@ if (twitch) {
     state.channelId = auth.channelId;
     setStatus('Ready.');
     loadExisting();
+    refreshPowerCatalog();
   });
 
   twitch.configuration.onChanged(() => {

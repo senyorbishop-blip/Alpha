@@ -2,30 +2,10 @@
 (function(){
   function viewerProfileEntries(env) { return Object.values(env.viewerProfiles || {}).filter(v => v && typeof v === 'object'); }
   function viewerPowerDefs(env) {
-    const base = {
-      pebble_toss:     { name:'Pebble Toss',      kind:'single_damage', description:'Deal 1d4 damage to one chosen token.',                                                                    target_mode:'token', cooldown_sec:0 },
-      arcane_zap:      { name:'Arcane Zap',        kind:'single_damage', description:'Deal 1d10 damage to one chosen token.',                                                                   target_mode:'token', cooldown_sec:0 },
-      healing_spark:   { name:'Healing Spark',     kind:'single_heal',   description:'Restore 1d4 HP to one chosen token.',                                                                    target_mode:'token', cooldown_sec:0 },
-      battle_blessing: { name:'Battle Blessing',   kind:'single_heal',   description:'Restore 1d8 HP to one chosen token.',                                                                    target_mode:'token', cooldown_sec:0 },
-      fireball:        { name:'Fireball',          kind:'area_damage',   description:'Choose a point on the map. 15 ft burst, Dex save DC 13 for half damage.',                               target_mode:'point', cooldown_sec:90,  area_shape:'burst', radius_ft:15, cone_angle_deg:60, line_width_ft:5 },
-      meteor_pop:      { name:'Meteor Pop',        kind:'area_damage',   description:'Choose a point on the map. 10 ft burst, 4d4 damage, Dex save DC 12 for half damage.',                    target_mode:'point', cooldown_sec:45,  area_shape:'burst', radius_ft:10, cone_angle_deg:60, line_width_ft:5 },
-      trip_hex:        { name:'Trip Hex',          kind:'single_status', description:'Knock one token prone for 30 seconds. STR save negates. Also deals bonus 1d6 damage on hit.',             target_mode:'token', cooldown_sec:30,  condition:'prone',     duration_sec:30 },
-      flash_freeze:    { name:'Flash Freeze',      kind:'single_status', description:'Freeze one token in place for 20 seconds. DEX save negates.',                                           target_mode:'token', cooldown_sec:45,  condition:'restrained', duration_sec:20 },
-      goo_burst:       { name:'Goo Burst',         kind:'area_status',   description:'10 ft burst that restrains creatures for 20 seconds unless they pass a Dex save. Great for slowing movement.', target_mode:'point', cooldown_sec:75,  area_shape:'burst', radius_ft:10, cone_angle_deg:60, line_width_ft:5, condition:'restrained', duration_sec:20 },
-      smoke_burst:     { name:'Smoke Burst',       kind:'area_status',   description:'10 ft burst that can blind targets briefly. CON save negates. Useful for short vision denial.',          target_mode:'point', cooldown_sec:45,  area_shape:'burst', radius_ft:10, cone_angle_deg:60, line_width_ft:5, condition:'blinded',    duration_sec:10 },
-      knockback:       { name:'Knockback',         kind:'knockback',     description:'Choose a point on the map. Blasts the nearest token exactly one 5 ft grid square away from that point.', target_mode:'point', cooldown_sec:30,  area_shape:'burst', radius_ft:5 },
-      give_potion:     { name:'Give Potion',       kind:'grant_item',    description:'Give the targeted player token a Potion of Minor Healing (heals 1d4).',                                 target_mode:'token', cooldown_sec:0 },
-      chain_lightning: { name:'Chain Lightning',   kind:'chain_damage',  description:'Strike one token, then arc to nearby tokens — bouncing between 4 and 6 in all. Each takes 4d6 damage; Dex save DC 17 for half.', target_mode:'token', cooldown_sec:90 },
-      give_random_item:{ name:'Give Random Item',  kind:'grant_random_item', description:'Give the targeted player token a random item drawn from the item library.',                          target_mode:'token', cooldown_sec:30 },
-      magic_missile:   { name:'Magic Missile',     kind:'single_damage', description:'Three darts of force strike one target unerringly — 3d4+3 force damage, no attack roll, never misses.',   target_mode:'token', cooldown_sec:30 },
-      shield:          { name:'Shield',            kind:'support_status', description:'Ward a party member: an invisible barrier absorbs the next incoming attack (negates its damage) within 60 seconds.', target_mode:'token', cooldown_sec:30, condition:'shielded', duration_sec:60 },
-      ray_of_frost:    { name:'Ray of Frost',      kind:'single_damage_status', description:'A beam of frigid cold deals 1d8 cold damage and slows the target (halved movement) for 30 seconds.', target_mode:'token', cooldown_sec:30, condition:'slowed', duration_sec:30 },
-      sleep:           { name:'Sleep',             kind:'single_status', description:'Lull one target into a magical slumber for 30 seconds (skips its turn) unless it passes a WIS save DC 12.', target_mode:'token', cooldown_sec:45, condition:'asleep', duration_sec:30 },
-      lightning_bolt:  { name:'Lightning Bolt',    kind:'line_damage',   description:'A bolt tears through the target and everything in a line behind it (6 squares, pick the direction) — 2d6+1 lightning damage; Dex save DC 13 for half.', target_mode:'token', cooldown_sec:90 },
-    };
-    const aliases = { healing_spark:['Healing Word'], battle_blessing:['Bless'], goo_burst:['Grease'], smoke_burst:['Fog Cloud'] };
-    Object.entries(aliases).forEach(([pid, names]) => { if (base[pid]) base[pid].aliases = names; });
-    return { ...base, ...(env.viewerPowerCatalog || {}) };
+    // Single source of truth: the server's VIEWER_POWER_DEFS (plus custom
+    // powers), synced into viewerPowerCatalog via state_sync /
+    // viewer_power_catalog_sync. Never enumerate powers in the frontend.
+    return { ...(env.viewerPowerCatalog || {}) };
   }
   function viewerPowerName(env, powerId) { return String(viewerPowerDefs(env)[powerId]?.name || powerId || 'Viewer Power'); }
   function viewerPowerDescription(env, powerId) {

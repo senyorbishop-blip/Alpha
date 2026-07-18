@@ -845,6 +845,17 @@ class Session:
         self.world_state = world_state
         return normalized
 
+    def client_viewer_power_catalog(self) -> dict:
+        """Full merged viewer power defs (shipped + custom) for client sync.
+
+        Every client power list (viewer panel, DM grant dropdown, rewards
+        checklist) renders from this payload, so the shipped defs live only
+        in server/handlers/viewer_powers.py. Persistence keeps storing just
+        the custom entries (self.viewer_power_catalog).
+        """
+        from server.handlers.viewer_powers import _viewer_catalog_payload
+        return _viewer_catalog_payload(self)
+
     def to_state_dict(self) -> dict:
         """Full state snapshot for new joiners."""
         # A full state snapshot is read-only: it must never recompute
@@ -900,7 +911,7 @@ class Session:
             "editor_lights": dict(self.editor_lights or {}),
             "viewer_profiles": dict(self.viewer_profiles or {}),
             "viewer_pending_actions": dict(self.viewer_pending_actions or {}),
-            "viewer_power_catalog": dict(self.viewer_power_catalog or {}),
+            "viewer_power_catalog": self.client_viewer_power_catalog(),
             "hazard_zones": dict(self.hazard_zones or {}),
             "scene_trigger_zones": dict(self.scene_trigger_zones() or {}),
             "handouts": list(self.handouts or []),
@@ -1210,7 +1221,7 @@ class Session:
             d["editor_lights"] = dict(self.editor_lights or {})
             d["viewer_profiles"] = dict(self.viewer_profiles or {})
             d["viewer_pending_actions"] = dict(self.viewer_pending_actions or {})
-            d["viewer_power_catalog"] = dict(self.viewer_power_catalog or {})
+            d["viewer_power_catalog"] = self.client_viewer_power_catalog()
             d["hazard_zones"] = dict(self.hazard_zones or {})
             d["scene_trigger_zones"] = dict(self.scene_trigger_zones() or {})
             d["handouts"] = list(self.handouts or [])
@@ -1334,7 +1345,7 @@ class Session:
                             viewer_profile = profiles.get(legacy_key) or {}
                             break
                 d["viewer_profiles"] = {viewer_key: viewer_profile} if viewer_key else {}
-                d["viewer_power_catalog"] = dict(self.viewer_power_catalog or {})
+                d["viewer_power_catalog"] = self.client_viewer_power_catalog()
                 all_pending = dict(self.viewer_pending_actions or {})
                 if viewer_key:
                     d["viewer_pending_actions"] = {pid: entry for pid, entry in all_pending.items() if str((entry or {}).get("viewer_key") or "") == viewer_key}
@@ -1356,7 +1367,7 @@ class Session:
             else:
                 d["viewer_profiles"] = {}
                 d["viewer_pending_actions"] = {}
-                d["viewer_power_catalog"] = dict(self.viewer_power_catalog or {})
+                d["viewer_power_catalog"] = self.client_viewer_power_catalog()
                 if role != "player":
                     d["saved_discoveries"] = []
             d["assistant_dm_permissions"] = assistant_dm_permissions_for_user(self, user_id) if role == "assistant_dm" and user_id else {}
