@@ -22934,30 +22934,11 @@ function visibleTargetTokensForViewerPowers() {
 }
 
 function viewerPowerDefs() {
-  const base = {
-    pebble_toss: { name:'Pebble Toss', description:'Deal 1d4 damage to one chosen token.', kind:'single_damage', target_mode:'token', cooldown_sec:0 },
-    arcane_zap: { name:'Arcane Zap', description:'Deal 1d10 damage to one chosen token.', kind:'single_damage', target_mode:'token', cooldown_sec:0 },
-    healing_spark: { name:'Healing Spark', description:'Restore 1d4 HP to one chosen token.', kind:'single_heal', target_mode:'token', cooldown_sec:0 },
-    battle_blessing: { name:'Battle Blessing', description:'Restore 1d8 HP to one chosen token.', kind:'single_heal', target_mode:'token', cooldown_sec:0 },
-    fireball: { name:'Fireball', description:'Choose a point on the map. 15 ft burst, Dex save DC 13 for half damage.', kind:'area_damage', target_mode:'point', cooldown_sec:90, area_shape:'burst', radius_ft:15, cone_angle_deg:60, line_width_ft:5 },
-    meteor_pop: { name:'Meteor Pop', description:'Choose a point on the map. 10 ft burst, 4d4 damage, Dex save DC 12 for half damage.', kind:'area_damage', target_mode:'point', cooldown_sec:45, area_shape:'burst', radius_ft:10, cone_angle_deg:60, line_width_ft:5 },
-    trip_hex: { name:'Trip Hex', description:'Knock one token prone for 30 seconds. STR save negates. Also deals bonus 1d6 damage on hit.', kind:'single_status', target_mode:'token', cooldown_sec:30, condition:'prone', duration_sec:30 },
-    flash_freeze: { name:'Flash Freeze', description:'Freeze one token in place for 20 seconds. DEX save negates.', kind:'single_status', target_mode:'token', cooldown_sec:45, condition:'restrained', duration_sec:20 },
-    goo_burst: { name:'Goo Burst', description:'10 ft burst that restrains creatures for 20 seconds unless they pass a Dex save. Great for slowing movement.', kind:'area_status', target_mode:'point', cooldown_sec:75, area_shape:'burst', radius_ft:10, cone_angle_deg:60, line_width_ft:5, condition:'restrained', duration_sec:20 },
-    smoke_burst: { name:'Smoke Burst', description:'10 ft burst that can blind targets briefly. CON save negates. Useful for short vision denial.', kind:'area_status', target_mode:'point', cooldown_sec:45, area_shape:'burst', radius_ft:10, cone_angle_deg:60, line_width_ft:5, condition:'blinded', duration_sec:10 },
-    knockback: { name:'Knockback', description:'Choose a point on the map. Blasts the nearest token exactly one 5 ft grid square away from that point.', kind:'knockback', target_mode:'point', cooldown_sec:30, area_shape:'burst', radius_ft:5 },
-    give_potion: { name:'Give Potion', description:'Give the targeted player token a Potion of Minor Healing (heals 1d4).', kind:'grant_item', target_mode:'token', cooldown_sec:0 },
-    chain_lightning: { name:'Chain Lightning', description:'Strike one token, then arc to nearby tokens — bouncing between 4 and 6 in all. Each takes 4d6 lightning damage; Dex save DC 17 for half.', kind:'chain_damage', target_mode:'token', cooldown_sec:90 },
-    give_random_item: { name:'Give Random Item', description:'Give the targeted player token a random item drawn from the item library.', kind:'grant_random_item', target_mode:'token', cooldown_sec:30 },
-    magic_missile: { name:'Magic Missile', description:'Three darts of force strike one target unerringly — 3d4+3 force damage, no attack roll, never misses.', kind:'single_damage', target_mode:'token', cooldown_sec:30 },
-    shield: { name:'Shield', description:'Ward a party member: an invisible barrier absorbs the next incoming attack (negates its damage) within 60 seconds.', kind:'support_status', target_mode:'token', cooldown_sec:30, condition:'shielded', duration_sec:60 },
-    ray_of_frost: { name:'Ray of Frost', description:'A beam of frigid cold deals 1d8 cold damage and slows the target (halved movement) for 30 seconds.', kind:'single_damage_status', target_mode:'token', cooldown_sec:30, condition:'slowed', duration_sec:30 },
-    sleep: { name:'Sleep', description:'Lull one target into a magical slumber for 30 seconds (skips its turn) unless it passes a WIS save DC 12.', kind:'single_status', target_mode:'token', cooldown_sec:45, condition:'asleep', duration_sec:30 },
-    lightning_bolt: { name:'Lightning Bolt', description:'A bolt tears through the target and everything in a line behind it (6 squares, pick the direction) — 2d6+1 lightning damage; Dex save DC 13 for half.', kind:'line_damage', target_mode:'token', cooldown_sec:90, aliases:[] },
-  };
-  const aliases = { healing_spark:['Healing Word'], battle_blessing:['Bless'], goo_burst:['Grease'], smoke_burst:['Fog Cloud'] };
-  Object.entries(aliases).forEach(([pid, names]) => { if (base[pid]) base[pid].aliases = names; });
-  return { ...base, ...(viewerPowerCatalog || {}) };
+  // Single source of truth: the server's VIEWER_POWER_DEFS (plus custom
+  // powers), synced into viewerPowerCatalog via state_sync /
+  // viewer_power_catalog_sync. Never enumerate powers in the frontend —
+  // any power added server-side appears everywhere automatically.
+  return { ...(viewerPowerCatalog || {}) };
 }
 
 function viewerPowerName(powerId) {
@@ -23139,7 +23120,7 @@ function renderViewerPanel() {
   const presenceCtrl = document.getElementById('viewer-presence-control');
   if (presenceCtrl) presenceCtrl.style.display = ROLE === 'dm' ? 'block' : 'none';
   const defs = viewerPowerDefs();
-  const powerOptions = Object.entries(defs).map(([id, def]) => `<option value="${escapeHtml(id)}">${escapeHtml(def.name || id)}${def.custom ? ' · Custom' : ''}</option>`).join('');
+  const powerOptions = Object.entries(defs).map(([id, def]) => `<option value="${escapeHtml(id)}" title="${escapeHtml(def.description || '')}">${escapeHtml(def.name || id)}${def.custom ? ' · Custom' : ''}</option>`).join('');
   if (ROLE === 'dm') {
     const viewers = Object.values(users || {}).filter(u => u && u.role === 'viewer' && u.connected);
     if (!viewers.some(v => v.id === _dmSelectedViewerId)) _dmSelectedViewerId = viewers[0]?.id || '';

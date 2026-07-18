@@ -2183,6 +2183,10 @@ def _default_chat_rewards_config() -> dict:
 
     all_powers = table(*[(pid, 1) for pid in VIEWER_BASE_POWER_DEFS.keys()])
 
+    # Tier placement: Shield rides the support-flavored tables (sub, single
+    # gift), Magic Missile and Ray of Frost the mid tiers, and the strongest
+    # control/line powers — Lightning Bolt and Sleep — appear ONLY in the top
+    # tiers (gift ×10+, bits 1000+) via the all-powers tables.
     return {
         "version": 1,
         # Single sub / resub / gift recipient: heals and support items.
@@ -2193,23 +2197,23 @@ def _default_chat_rewards_config() -> dict:
         "gift_tiers": [
             {"min_count": 1, "table": table(
                 ("healing_spark", 25), ("battle_blessing", 15), ("give_potion", 15),
-                ("arcane_zap", 15), ("magic_missile", 15), ("give_random_item", 15),
+                ("arcane_zap", 15), ("shield", 15), ("give_random_item", 15),
             )},
             {"min_count": 5, "table": table(
-                ("battle_blessing", 15), ("arcane_zap", 15), ("give_random_item", 10),
+                ("battle_blessing", 12), ("arcane_zap", 12), ("give_random_item", 10),
                 ("fireball", 10), ("trip_hex", 10), ("smoke_burst", 10), ("knockback", 10),
-                ("ray_of_frost", 10), ("sleep", 10),
+                ("magic_missile", 13), ("ray_of_frost", 13),
             )},
             {"min_count": 10, "table": all_powers},
         ],
         "bits_tiers": [
             {"threshold": 100, "table": table(
-                ("pebble_toss", 40), ("arcane_zap", 20), ("magic_missile", 20), ("healing_spark", 20),
+                ("pebble_toss", 40), ("arcane_zap", 30), ("healing_spark", 30),
             )},
             {"threshold": 500, "table": table(
                 ("arcane_zap", 15), ("battle_blessing", 15), ("trip_hex", 15),
-                ("goo_burst", 10), ("fireball", 15), ("ray_of_frost", 15),
-                ("sleep", 10), ("lightning_bolt", 5),
+                ("goo_burst", 10), ("fireball", 15), ("magic_missile", 15),
+                ("ray_of_frost", 15),
             )},
             {"threshold": 1000, "table": all_powers},
         ],

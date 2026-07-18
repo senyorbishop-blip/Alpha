@@ -37,7 +37,9 @@ lives under the same developer account.
      `power_battle_blessing`, `power_pebble_toss`, `power_arcane_zap`,
      `power_meteor_pop`, `power_trip_hex`, `power_flash_freeze`,
      `power_goo_burst`, `power_smoke_burst`, `power_knockback`,
-     `power_give_potion`, `power_give_random_item`.
+     `power_give_potion`, `power_give_random_item`, `power_magic_missile`,
+     `power_shield`, `power_ray_of_frost`, `power_sleep`,
+     `power_lightning_bolt`.
    - The SKU → power map lives in `server/twitch_ext/granting.py` (`SKU_TO_POWER`)
      and is mirrored in `extension/config.js` (`POWERS`). Keep them in sync.
 6. **Asset hosting / Views**: set the viewer file to `viewer.html` and the

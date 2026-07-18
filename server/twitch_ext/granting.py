@@ -47,6 +47,11 @@ SKU_TO_POWER = {
     "power_give_potion": "give_potion",
     "power_chain_lightning": "chain_lightning",
     "power_give_random_item": "give_random_item",
+    "power_magic_missile": "magic_missile",
+    "power_shield": "shield",
+    "power_ray_of_frost": "ray_of_frost",
+    "power_sleep": "sleep",
+    "power_lightning_bolt": "lightning_bolt",
 }
 # Defensive: drop any mapping whose target is not a real base power.
 SKU_TO_POWER = {sku: pid for sku, pid in SKU_TO_POWER.items() if pid in VIEWER_POWER_DEFS}

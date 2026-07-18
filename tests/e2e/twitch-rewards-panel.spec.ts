@@ -42,7 +42,7 @@ test('Rewards tiers and bridge log expand; power counts update live', async ({ b
   // Tier rows render collapsed, with a live power count in the header.
   const subHeader = rewards.locator('.tw-collapse-header', { hasText: 'Single sub / resub' });
   await expect(subHeader).toBeVisible();
-  await expect(subHeader).toContainText('(4 powers)');
+  await expect(subHeader).toContainText('(5 powers)');
 
   const subBody = subHeader.locator('xpath=following-sibling::div[contains(@class,"tw-collapse-body")][1]');
   await expect(subBody).toBeHidden();
@@ -58,9 +58,15 @@ test('Rewards tiers and bridge log expand; power counts update live', async ({ b
   // Ticking powers updates the "(N powers)" count live.
   const fireball = subBody.locator('label').filter({ hasText: /^Fireball$/ }).locator('input');
   await fireball.check();
-  await expect(subHeader).toContainText('(5 powers)');
+  await expect(subHeader).toContainText('(6 powers)');
   await fireball.uncheck();
-  await expect(subHeader).toContainText('(4 powers)');
+  await expect(subHeader).toContainText('(5 powers)');
+
+  // The five newest powers are offered in the checklist too — the list is
+  // generated from the server's power defs, so nothing is hardcoded here.
+  await expect(subBody.getByText('Lightning Bolt', { exact: true })).toBeVisible();
+  await expect(subBody.getByText('Magic Missile', { exact: true })).toBeVisible();
+  await expect(subBody.getByText('Sleep', { exact: true })).toBeVisible();
 
   // Clicking again collapses.
   await subHeader.click();
