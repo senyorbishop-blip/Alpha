@@ -42,7 +42,8 @@ function loadJson(relPath) {
 
 const commandMap = loadJson('config/commands.json')  ?? {
   '!join': 'join', '!leave': 'leave', '!inventory': 'inventory', '!inv': 'inventory',
-  '!bag': 'bag', '!target': 'target', '!use': 'target',
+  '!bag': 'bag', '!target': 'target', '!use': 'use',
+  '!powers': 'powers', '!power': 'powers',
   '!help': 'help', '!commands': 'help', '!command': 'help',
   '!vote': 'vote', '!name': 'name', '!me': 'me', '!character': 'me',
   '!stats': 'stats', '!sheet': 'stats', '!equip': 'equip', '!shop': 'shop',
@@ -138,6 +139,7 @@ const rateLimiter = new RateLimiter({
     leave:       cooldowns.leave_seconds       ?? 5,
     inventory:   cooldowns.inventory_seconds   ?? 10,
     target:      cooldowns.target_seconds      ?? 30,
+    powers:      cooldowns.powers_seconds      ?? 10,
     help:        cooldowns.help_seconds        ?? 5,
     vote:        cooldowns.vote_seconds        ?? 2,
     name:        cooldowns.name_seconds        ?? 10,

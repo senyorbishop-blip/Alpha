@@ -17,13 +17,22 @@
       give_potion:     { name:'Give Potion',       kind:'grant_item',    description:'Give the targeted player token a Potion of Minor Healing (heals 1d4).',                                 target_mode:'token', cooldown_sec:0 },
       chain_lightning: { name:'Chain Lightning',   kind:'chain_damage',  description:'Strike one token, then arc to nearby tokens — bouncing between 4 and 6 in all. Each takes 4d6 damage; Dex save DC 17 for half.', target_mode:'token', cooldown_sec:90 },
       give_random_item:{ name:'Give Random Item',  kind:'grant_random_item', description:'Give the targeted player token a random item drawn from the item library.',                          target_mode:'token', cooldown_sec:30 },
+      magic_missile:   { name:'Magic Missile',     kind:'single_damage', description:'Three darts of force strike one target unerringly — 3d4+3 force damage, no attack roll, never misses.',   target_mode:'token', cooldown_sec:30 },
+      shield:          { name:'Shield',            kind:'support_status', description:'Ward a party member: an invisible barrier absorbs the next incoming attack (negates its damage) within 60 seconds.', target_mode:'token', cooldown_sec:30, condition:'shielded', duration_sec:60 },
+      ray_of_frost:    { name:'Ray of Frost',      kind:'single_damage_status', description:'A beam of frigid cold deals 1d8 cold damage and slows the target (halved movement) for 30 seconds.', target_mode:'token', cooldown_sec:30, condition:'slowed', duration_sec:30 },
+      sleep:           { name:'Sleep',             kind:'single_status', description:'Lull one target into a magical slumber for 30 seconds (skips its turn) unless it passes a WIS save DC 12.', target_mode:'token', cooldown_sec:45, condition:'asleep', duration_sec:30 },
+      lightning_bolt:  { name:'Lightning Bolt',    kind:'line_damage',   description:'A bolt tears through the target and everything in a line behind it (6 squares, pick the direction) — 2d6+1 lightning damage; Dex save DC 13 for half.', target_mode:'token', cooldown_sec:90 },
     };
+    const aliases = { healing_spark:['Healing Word'], battle_blessing:['Bless'], goo_burst:['Grease'], smoke_burst:['Fog Cloud'] };
+    Object.entries(aliases).forEach(([pid, names]) => { if (base[pid]) base[pid].aliases = names; });
     return { ...base, ...(env.viewerPowerCatalog || {}) };
   }
   function viewerPowerName(env, powerId) { return String(viewerPowerDefs(env)[powerId]?.name || powerId || 'Viewer Power'); }
   function viewerPowerDescription(env, powerId) {
     const def = viewerPowerDefs(env)[powerId] || {};
     let text = String(def.description || 'Viewer power');
+    const aka = (def.aliases || []).filter(Boolean);
+    if (aka.length) text += ` (aka ${aka.join(', ')})`;
     if (def.kind === 'single_status' || def.kind === 'area_status') {
       const cond = String(def.condition || '').trim();
       const dur = Math.max(0, Number(def.duration_sec || 0));
@@ -182,12 +191,102 @@
     setTimeout(() => { [bolt, flare, scorch, label].forEach(n => n.remove()); }, 760);
   }
 
+  function showLineEffectFx(env, wrap, payload) {
+    // Draw the ACTUAL line of a line power (e.g. Lightning Bolt) between the
+    // world endpoints, not just a flash at the target.
+    if (!Number.isFinite(Number(payload.x1)) || !Number.isFinite(Number(payload.x2))) return;
+    const start = env.worldToScreen(Number(payload.x1), Number(payload.y1));
+    const end = env.worldToScreen(Number(payload.x2), Number(payload.y2));
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const length = Math.max(8, Math.hypot(dx, dy));
+    const angle = Math.atan2(dy, dx);
+    const beam = appendViewerFxNode(env, wrap, {
+      left: `${start.x}px`, top: `${start.y}px`, width: `${length}px`, height: '10px', marginTop: '-5px',
+      transformOrigin: '0% 50%', transform: `rotate(${angle}rad) scaleX(0.05)`, opacity: '0.1',
+      borderRadius: '6px',
+      background: 'linear-gradient(90deg, rgba(224,242,254,0.95), rgba(125,211,252,0.95) 30%, rgba(59,130,246,0.92) 70%, rgba(239,246,255,0.98))',
+      boxShadow: '0 0 14px rgba(147,197,253,0.95), 0 0 34px rgba(59,130,246,0.6)'
+    });
+    const glow = appendViewerFxNode(env, wrap, {
+      left: `${start.x}px`, top: `${start.y}px`, width: `${length}px`, height: '26px', marginTop: '-13px',
+      transformOrigin: '0% 50%', transform: `rotate(${angle}rad) scaleX(0.05)`, opacity: '0.05',
+      borderRadius: '13px',
+      background: 'linear-gradient(90deg, rgba(59,130,246,0.0), rgba(96,165,250,0.35), rgba(59,130,246,0.0))',
+      filter: 'blur(2px)'
+    });
+    const label = appendViewerFxNode(env, wrap, {
+      left: `${(start.x + end.x) / 2}px`, top: `${(start.y + end.y) / 2 - 24}px`, transform: 'translate(-50%, -50%) scale(0.92)',
+      padding: '0.4rem 0.75rem', borderRadius: '999px', fontFamily: "'Cinzel', serif", letterSpacing: '0.1em',
+      color: '#eff6ff', border: '1px solid rgba(191,219,254,0.72)',
+      background: 'linear-gradient(180deg, rgba(37,99,235,0.88), rgba(30,64,175,0.72))',
+      boxShadow: '0 0 18px rgba(59,130,246,0.3)', whiteSpace: 'nowrap'
+    });
+    label.textContent = payload.label || 'LIGHTNING BOLT';
+    requestAnimationFrame(() => {
+      beam.style.transition = 'transform 160ms ease-out, opacity 140ms ease';
+      beam.style.transform = `rotate(${angle}rad) scaleX(1)`;
+      beam.style.opacity = '1';
+      glow.style.transition = 'transform 200ms ease-out, opacity 220ms ease';
+      glow.style.transform = `rotate(${angle}rad) scaleX(1)`;
+      glow.style.opacity = '1';
+      label.style.transition = 'transform 620ms ease, opacity 680ms ease';
+      label.style.transform = 'translate(-50%, -86%) scale(1.04)';
+      label.style.opacity = '0';
+    });
+    setTimeout(() => {
+      beam.style.transition = 'opacity 260ms ease';
+      beam.style.opacity = '0';
+      glow.style.transition = 'opacity 300ms ease';
+      glow.style.opacity = '0';
+    }, 420);
+    setTimeout(() => { [beam, glow, label].forEach(n => n.remove()); }, 820);
+  }
+
+  function showConditionFlashFx(env, wrap, screenPoint, payload) {
+    // Brief icon flash on a token that just gained a condition
+    // (slowed / asleep / shielded / blessed / …).
+    const point = screenPoint || { x: wrap.clientWidth / 2, y: wrap.clientHeight / 2 };
+    const icon = appendViewerFxNode(env, wrap, {
+      left: `${point.x}px`, top: `${point.y}px`, transform: 'translate(-50%, -50%) scale(0.4)',
+      fontSize: '30px', opacity: '0.1', textShadow: '0 0 14px rgba(255,255,255,0.85)'
+    });
+    icon.textContent = payload.icon || '✳️';
+    const ring = appendViewerFxNode(env, wrap, {
+      left: `${point.x}px`, top: `${point.y}px`, width: '34px', height: '34px', marginLeft: '-17px', marginTop: '-17px',
+      borderRadius: '999px', border: '2px solid rgba(196,225,255,0.85)', transform: 'scale(0.4)', opacity: '0.9',
+      boxShadow: '0 0 18px rgba(147,197,253,0.5)'
+    });
+    requestAnimationFrame(() => {
+      icon.style.transition = 'transform 420ms cubic-bezier(.18,.74,.18,1), opacity 300ms ease';
+      icon.style.transform = 'translate(-50%, -110%) scale(1.15)';
+      icon.style.opacity = '1';
+      ring.style.transition = 'transform 520ms cubic-bezier(.18,.74,.18,1), opacity 560ms ease';
+      ring.style.transform = 'scale(2.1)';
+      ring.style.opacity = '0';
+    });
+    setTimeout(() => {
+      icon.style.transition = 'transform 380ms ease, opacity 420ms ease';
+      icon.style.transform = 'translate(-50%, -170%) scale(0.9)';
+      icon.style.opacity = '0';
+    }, 620);
+    setTimeout(() => { [icon, ring].forEach(n => n.remove()); }, 1100);
+  }
+
   function showViewerFx(env, rawPayload) {
     let payload = rawPayload || {};
     const wrap = env.document.getElementById('canvas-wrap') || env.document.body;
     if (!wrap) return;
     if (payload.effect === 'area_shape') payload = { ...payload, effect: (payload.area_shape === 'burst' ? 'fireball' : 'power') };
     const screenPoint = viewerFxScreenPoint(env, payload);
+    if (payload.effect === 'line_effect') {
+      showLineEffectFx(env, wrap, payload);
+      return;
+    }
+    if (payload.effect === 'condition_flash') {
+      showConditionFlashFx(env, wrap, screenPoint, payload);
+      return;
+    }
     if (payload.effect === 'healing_spark') {
       showHealingSparkFx(env, wrap, screenPoint, payload);
       return;
@@ -328,5 +427,5 @@
     });
     setTimeout(() => fx.remove(), 760);
   }
-  window.AppGameplayViewer = { viewerProfileEntries, viewerPowerDefs, viewerPowerName, viewerPowerDescription, viewerPowerAreaShape, viewerPowerNeedsMapTarget, viewerPowerNeedsSourceToken, viewerPowerRangePx, viewerPowerLineWidthPx, viewerPowerConeAngleDeg, viewerPowerActionLabel, viewerPowerCooldownLabel, revokeViewerPower, viewerFxScreenPoint, showViewerFx };
+  window.AppGameplayViewer = { viewerProfileEntries, viewerPowerDefs, viewerPowerName, viewerPowerDescription, viewerPowerAreaShape, viewerPowerNeedsMapTarget, viewerPowerNeedsSourceToken, viewerPowerRangePx, viewerPowerLineWidthPx, viewerPowerConeAngleDeg, viewerPowerActionLabel, viewerPowerCooldownLabel, revokeViewerPower, viewerFxScreenPoint, showViewerFx, showLineEffectFx, showConditionFlashFx };
 })();

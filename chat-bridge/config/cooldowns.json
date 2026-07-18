@@ -5,6 +5,7 @@
   "leave_seconds":    5,
   "inventory_seconds": 10,
   "target_seconds":   30,
+  "powers_seconds":   10,
   "vote_seconds":     2,
   "name_seconds":     10,
   "me_seconds":       10,

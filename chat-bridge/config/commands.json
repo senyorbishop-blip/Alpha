@@ -7,6 +7,8 @@
   "!bag":         "bag",
   "!target":      "target",
   "!use":         "use",
+  "!powers":      "powers",
+  "!power":       "powers",
   "!help":        "help",
   "!commands":    "help",
   "!command":     "help",

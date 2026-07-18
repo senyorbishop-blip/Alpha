@@ -39,5 +39,11 @@
   "me_not_joined": "@{user} Type !join first to enter the game.",
   "me_cooldown": "@{user} Wait {seconds}s.",
   "unknown_command": "@{user} I don't know that one — try !help for the command list.",
-  "progression_cooldown": "@{user} Wait {seconds}s."
+  "progression_cooldown": "@{user} Wait {seconds}s.",
+  "follow_up_prompt": "@{user} {power} at {target} — {prompt}",
+  "follow_up_timeout": "@{user} {power} fizzles — you didn't choose in time.",
+  "follow_up_cancelled": "@{user} {power} cancelled.",
+  "powers_usage": "@{user} usage: {powersCmd} <name> — e.g. {powersCmd} fireball",
+  "powers_not_found": "@{user} I don't know a power called '{name}'.",
+  "powers_info": "@{user} {name}{aliases}: {description}"
 }

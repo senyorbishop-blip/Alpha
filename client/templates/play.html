@@ -22949,7 +22949,14 @@ function viewerPowerDefs() {
     give_potion: { name:'Give Potion', description:'Give the targeted player token a Potion of Minor Healing (heals 1d4).', kind:'grant_item', target_mode:'token', cooldown_sec:0 },
     chain_lightning: { name:'Chain Lightning', description:'Strike one token, then arc to nearby tokens — bouncing between 4 and 6 in all. Each takes 4d6 lightning damage; Dex save DC 17 for half.', kind:'chain_damage', target_mode:'token', cooldown_sec:90 },
     give_random_item: { name:'Give Random Item', description:'Give the targeted player token a random item drawn from the item library.', kind:'grant_random_item', target_mode:'token', cooldown_sec:30 },
+    magic_missile: { name:'Magic Missile', description:'Three darts of force strike one target unerringly — 3d4+3 force damage, no attack roll, never misses.', kind:'single_damage', target_mode:'token', cooldown_sec:30 },
+    shield: { name:'Shield', description:'Ward a party member: an invisible barrier absorbs the next incoming attack (negates its damage) within 60 seconds.', kind:'support_status', target_mode:'token', cooldown_sec:30, condition:'shielded', duration_sec:60 },
+    ray_of_frost: { name:'Ray of Frost', description:'A beam of frigid cold deals 1d8 cold damage and slows the target (halved movement) for 30 seconds.', kind:'single_damage_status', target_mode:'token', cooldown_sec:30, condition:'slowed', duration_sec:30 },
+    sleep: { name:'Sleep', description:'Lull one target into a magical slumber for 30 seconds (skips its turn) unless it passes a WIS save DC 12.', kind:'single_status', target_mode:'token', cooldown_sec:45, condition:'asleep', duration_sec:30 },
+    lightning_bolt: { name:'Lightning Bolt', description:'A bolt tears through the target and everything in a line behind it (6 squares, pick the direction) — 2d6+1 lightning damage; Dex save DC 13 for half.', kind:'line_damage', target_mode:'token', cooldown_sec:90, aliases:[] },
   };
+  const aliases = { healing_spark:['Healing Word'], battle_blessing:['Bless'], goo_burst:['Grease'], smoke_burst:['Fog Cloud'] };
+  Object.entries(aliases).forEach(([pid, names]) => { if (base[pid]) base[pid].aliases = names; });
   return { ...base, ...(viewerPowerCatalog || {}) };
 }
 
@@ -22974,8 +22981,15 @@ function viewerPowerDescription(powerId) {
     knockback: 'Use “Target on Map” near the enemy to push it away.',
     give_potion: 'Use on a player-owned token.',
     chain_lightning: 'Use on a token to start the lightning chain.',
-    give_random_item: 'Use on a player-owned token.'
+    give_random_item: 'Use on a player-owned token.',
+    magic_missile: 'Use on a token. Always hits.',
+    shield: 'Use on an ally token to absorb the next hit.',
+    ray_of_frost: 'Use on a token. Damage + slow.',
+    sleep: 'Use on a token. WIS save or it sleeps.',
+    lightning_bolt: 'Use on a token; chat picks the direction (viewers auto-aim).'
   };
+  const aka = (def.aliases || []).filter(Boolean);
+  if (aka.length) text += ` (aka ${aka.join(', ')})`;
   if (def.kind === 'single_status' || def.kind === 'area_status') {
     const cond = String(def.condition || '').trim();
     const dur = Math.max(0, Number(def.duration_sec || 0));

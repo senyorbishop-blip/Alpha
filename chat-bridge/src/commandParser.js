@@ -1,6 +1,7 @@
 'use strict';
 
 const { sanitize, validateUsername, sanitizeArg } = require('./sanitizer');
+const { PendingInteractions } = require('./interactions');
 
 const DEFAULT_RESPONSES = {
   join_success:       '{user} has entered the tavern! Type !inventory to see your items.',
@@ -39,6 +40,12 @@ const DEFAULT_RESPONSES = {
   me_cooldown:        '@{user} Wait {seconds}s.',
   unknown_command:    "@{user} I don't know that one — try !help for the command list.",
   progression_cooldown: '@{user} Wait {seconds}s.',
+  follow_up_prompt:   '@{user} {power} at {target} — {prompt}',
+  follow_up_timeout:  "@{user} {power} fizzles — you didn't choose in time.",
+  follow_up_cancelled: '@{user} {power} cancelled.',
+  powers_usage:       '@{user} usage: {powersCmd} <name> — e.g. {powersCmd} fireball',
+  powers_not_found:   "@{user} I don't know a power called '{name}'.",
+  powers_info:        '@{user} {name}{aliases}: {description}',
 };
 
 // Usage hint per action, in display order, for the compact !help reply. Only
@@ -50,6 +57,7 @@ const ACTION_USAGE = [
   ['inventory',   ''],
   ['target',      '<name>'],
   ['use',         '<item> <target>'],
+  ['powers',      '<name>'],
   ['stats',       ''],
   ['bag',         ''],
   ['equip',       '<item>'],
@@ -81,7 +89,7 @@ const PROGRESSION_ACTIONS = new Set([
  * Response templates are loaded from config/responses.json.
  */
 class CommandParser {
-  constructor({ commandMap, responses, rateLimiter, gameClient, twitchClient, arenaHandler, progressionHandler }) {
+  constructor({ commandMap, responses, rateLimiter, gameClient, twitchClient, arenaHandler, progressionHandler, interactionTimeoutMs }) {
     this._commandMap = commandMap;
     this._responses = { ...DEFAULT_RESPONSES, ...(responses ?? {}) };
     this._rate = rateLimiter;
@@ -89,6 +97,9 @@ class CommandParser {
     this._twitch = twitchClient;
     this._arenaHandler = arenaHandler || null;
     this._progressionHandler = progressionHandler || null;
+    // Multi-step interactions (e.g. Lightning Bolt's direction): one pending
+    // follow-up per user, resolved by a bare (un-prefixed) chat reply.
+    this._interactions = new PendingInteractions({ timeoutMs: interactionTimeoutMs ?? 30000 });
     // Chatters who have !joined this session — used to decide whether an
     // unknown !command deserves a gentle "!help" nudge. Only joined chatters
     // get the nudge so the bot never replies to other bots' commands
@@ -114,7 +125,15 @@ class CommandParser {
 
   async handle(channel, tags, message) {
     const raw = String(message ?? '').trim();
-    if (!raw.startsWith('!')) return;
+    if (!raw.startsWith('!')) {
+      // While an interaction is pending, a bare reply (no ! prefix) that
+      // matches a valid answer resolves it. Anything else is ordinary chat.
+      const bareUser = validateUsername(tags.username ?? tags['display-name'] ?? '');
+      if (bareUser && this._interactions.has(bareUser)) {
+        await this._interactions.handleMessage(bareUser, raw);
+      }
+      return;
+    }
 
     const parts = raw.split(/\s+/);
     const cmdRaw = parts[0].toLowerCase();
@@ -152,6 +171,7 @@ class CommandParser {
       case 'inventory': await this._handleInventory(channel, userId, username, displayName); break;
       case 'target':    await this._handleTarget(channel, userId, username, displayName, args); break;
       case 'use':       await this._handleUse(channel, userId, username, displayName, args); break;
+      case 'powers':    await this._handlePowers(channel, username, displayName, args); break;
       case 'help':      this._handleHelp(channel, username); break;
       case 'vote':      await this._handleVote(channel, username, displayName, args); break;
       case 'name':      await this._handleName(channel, userId, username, displayName, args); break;
@@ -319,7 +339,11 @@ class CommandParser {
   }
 
   /** Send chat_participant_target (optionally with an item choice) and render the reply. */
-  async _sendTargetRequest(channel, userId, username, displayName, targetName, itemName) {
+  async _sendTargetRequest(channel, userId, username, displayName, targetName, itemName, followUp = null) {
+    // A fresh !use / !target always replaces any older pending interaction.
+    // (The follow-up continuation path already cleared its own entry.)
+    this._interactions.clear(username);
+
     const payload = {
       twitch_username: username,
       twitch_user_id: userId,
@@ -327,15 +351,27 @@ class CommandParser {
       target_name: targetName,
     };
     if (itemName) payload.item_name = itemName;
+    if (followUp && Object.keys(followUp).length > 0) payload.follow_up = followUp;
 
     const result = await this._game.send('chat_participant_target', payload);
 
+    if (result?.error_code === 'needs_follow_up') {
+      this._beginFollowUp(channel, userId, username, displayName, targetName, itemName, result, followUp ?? {});
+      return;
+    }
+
     if (result?.success) {
-      this._twitch.say(channel, this._t('target_hit', {
-        user: displayName,
-        item: result.item_name ?? 'item',
-        target: result.target_name ?? targetName,
-      }));
+      // Follow-up executions narrate the server's full recap ("⚡ Lightning
+      // Bolt tears rightward through …"); plain uses keep the short template.
+      if (followUp && result.message) {
+        this._twitch.say(channel, String(result.message));
+      } else {
+        this._twitch.say(channel, this._t('target_hit', {
+          user: displayName,
+          item: result.item_name ?? 'item',
+          target: result.target_name ?? targetName,
+        }));
+      }
     } else if (result?.error_code === 'no_item') {
       this._twitch.reply(channel, username, this._t('target_no_item', { user: displayName }));
     } else if (result?.error_code === 'not_joined') {
@@ -363,6 +399,71 @@ class CommandParser {
         user: displayName,
         message: result?.message ?? 'Could not use item.',
       }));
+    }
+  }
+
+  /**
+   * A power declared a follow-up question (needs_follow_up): store the
+   * pending interaction (replacing any older one) and prompt the chatter.
+   * The spec — prompt, valid options, aliases — comes from the power's def
+   * on the server, so this stays fully generic.
+   */
+  _beginFollowUp(channel, userId, username, displayName, targetName, itemName, result, answers) {
+    const spec = result.follow_up ?? {};
+    const powerName = result.power_name ?? result.item_name ?? 'That power';
+    const promptVars = {
+      user: displayName,
+      power: powerName,
+      target: result.target_name ?? targetName,
+      prompt: spec.prompt ?? 'which option?',
+    };
+    this._interactions.begin(username, {
+      spec,
+      answers,
+      onAnswer: async (value, entry) => {
+        const nextAnswers = { ...entry.answers, [spec.id]: value };
+        await this._sendTargetRequest(channel, userId, username, displayName, targetName, itemName, nextAnswers);
+      },
+      onCancel: () => {
+        this._twitch.reply(channel, username, this._t('follow_up_cancelled', { user: displayName, power: powerName }));
+      },
+      onTimeout: () => {
+        this._twitch.reply(channel, username, this._t('follow_up_timeout', { user: displayName, power: powerName }));
+      },
+    });
+    this._twitch.reply(channel, username, this._t('follow_up_prompt', promptVars));
+  }
+
+  /** !powers <name> — one-line description of any power (name or alias). */
+  async _handlePowers(channel, username, displayName, args) {
+    if (!this._rate.check(username, 'powers')) {
+      const rem = this._rate.remaining(username, 'powers');
+      this._twitch.reply(channel, username, this._t('progression_cooldown', { user: displayName, seconds: rem }));
+      return;
+    }
+
+    const powersCmd = this._commandFor('powers') || '!powers';
+    const name = sanitizeArg(args.join(' '), 80);
+    if (!name) {
+      this._twitch.reply(channel, username, this._t('powers_usage', { user: displayName, powersCmd }));
+      return;
+    }
+
+    const result = await this._game.send('chat_bridge_power_info', {
+      name,
+      twitch_username: username,
+    });
+
+    if (result?.found) {
+      const aliasList = result.aliases ?? [];
+      this._twitch.reply(channel, username, this._t('powers_info', {
+        user: displayName,
+        name: result.name ?? name,
+        aliases: aliasList.length ? ` (aka ${aliasList.join(', ')})` : '',
+        description: result.description ?? '',
+      }));
+    } else {
+      this._twitch.reply(channel, username, this._t('powers_not_found', { user: displayName, name }));
     }
   }
 

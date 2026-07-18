@@ -558,6 +558,16 @@ def _token_speed_ft(session: Session, token, combatant: dict | None = None) -> i
             if penalty <= -9999:
                 return 0
             base = max(0, base + penalty)
+    # Viewer-spell conditions: 'slowed' (Ray of Frost) halves movement,
+    # 'asleep' (Sleep) prevents it entirely until the timer expires.
+    if token is not None:
+        from server.handlers.conditions import _prune_token_condition_timers
+        _prune_token_condition_timers(token)
+        conditions = getattr(token, "conditions", None) or []
+        if "asleep" in conditions:
+            return 0
+        if "slowed" in conditions:
+            base = base // 2
     return base
 
 

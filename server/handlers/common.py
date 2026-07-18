@@ -507,10 +507,35 @@ def _token_map_context(token) -> str:
     return str(getattr(token, 'map_context', 'world') or 'world')
 
 
+def _consume_shield_condition(token) -> bool:
+    """Consume an active 'shielded' condition (from the viewer Shield power).
+
+    Returns True when an unexpired shield was present — the caller should
+    treat the incoming hit as fully absorbed. Expired shields are cleared
+    without absorbing.
+    """
+    import time
+    conditions = getattr(token, 'conditions', None)
+    if not isinstance(conditions, list) or 'shielded' not in conditions:
+        return False
+    timers = getattr(token, 'condition_timers', None)
+    timers = timers if isinstance(timers, dict) else {}
+    expiry = timers.pop('shielded', None)
+    token.condition_timers = timers
+    conditions.remove('shielded')
+    try:
+        expired = expiry is not None and float(expiry or 0) <= time.time()
+    except Exception:
+        expired = False
+    return not expired
+
+
 def _apply_damage(token, amount: int) -> int:
     if getattr(token, 'hp', None) is None:
         return 0
     dmg = max(0, int(amount or 0))
+    if dmg > 0 and _consume_shield_condition(token):
+        return 0
     temp_hp = max(0, int(getattr(token, 'temp_hp', 0) or 0))
     absorbed = min(temp_hp, dmg)
     token.temp_hp = temp_hp - absorbed
