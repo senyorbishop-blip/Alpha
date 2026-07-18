@@ -35,22 +35,34 @@ class LootRoller {
     return { items, cumWeights, total };
   }
 
+  _pick(compiled) {
+    if (!compiled || compiled.total === 0) return null;
+    const r = Math.random() * compiled.total;
+    // Binary search for the bucket
+    let lo = 0, hi = compiled.cumWeights.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (compiled.cumWeights[mid] <= r) lo = mid + 1;
+      else hi = mid;
+    }
+    return compiled.items[lo] ?? null;
+  }
+
   /**
    * Roll on a named table.
    * Returns an item-name string, or null if the table is empty / unknown.
    */
   roll(tableName) {
-    const table = this._compiled[tableName];
-    if (!table || table.total === 0) return null;
-    const r = Math.random() * table.total;
-    // Binary search for the bucket
-    let lo = 0, hi = table.cumWeights.length - 1;
-    while (lo < hi) {
-      const mid = (lo + hi) >> 1;
-      if (table.cumWeights[mid] <= r) lo = mid + 1;
-      else hi = mid;
-    }
-    return table.items[lo] ?? null;
+    return this._pick(this._compiled[tableName]);
+  }
+
+  /**
+   * Roll on an ad-hoc entry array ([{item, weight}, …]) — e.g. a gift-tier
+   * table from loot-tables.json. Returns an item-name string or null.
+   */
+  rollTable(entries) {
+    if (!Array.isArray(entries) || entries.length === 0) return null;
+    return this._pick(this._compile(entries));
   }
 
   /**
@@ -65,14 +77,7 @@ class LootRoller {
       if (amount >= tier.threshold) {
         const compiled = this._compile(tier.table ?? []);
         if (compiled.total === 0) continue;
-        const r = Math.random() * compiled.total;
-        let lo = 0, hi = compiled.cumWeights.length - 1;
-        while (lo < hi) {
-          const mid = (lo + hi) >> 1;
-          if (compiled.cumWeights[mid] <= r) lo = mid + 1;
-          else hi = mid;
-        }
-        const item = compiled.items[lo] ?? null;
+        const item = this._pick(compiled);
         return item ? { item, tableUsed: tier.threshold } : null;
       }
     }

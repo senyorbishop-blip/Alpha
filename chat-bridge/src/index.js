@@ -12,6 +12,7 @@ const { CommandParser } = require('./commandParser');
 const { RateLimiter }   = require('./rateLimiter');
 const { LootRoller, rollRewardEntry, pickRewardTier } = require('./lootRoller');
 const { EventSubClient } = require('./eventSubClient');
+const { EventRewards }   = require('./eventRewards');
 const { sanitize, validateUsername } = require('./sanitizer');
 const { Arena }         = require('./arena');
 const { ArenaProgression } = require('./arenaProgression');
@@ -68,6 +69,16 @@ const streamConfig = loadJson('config/stream.json') ?? {};
 const FULL_CHAT_NARRATION =
   /^(1|true|yes)$/i.test(process.env.CHAT_FULL_NARRATION ?? '') ||
   !!streamConfig.full_chat_narration;
+// Gift-sub handling options (config/stream.json → "gifts"):
+//   anonymous_mode: 'skip' (default; thank-you only) or 'bank' (hold the roll
+//     for the gifter to claim if they de-anonymize)
+//   cumulative: tier gift rewards by the gifter's session-total gifts
+//   welcome_recipients: one collective welcome line per gift batch
+const GIFT_CONFIG = {
+  anonymous_mode: streamConfig.gifts?.anonymous_mode === 'bank' ? 'bank' : 'skip',
+  cumulative: !!streamConfig.gifts?.cumulative,
+  welcome_recipients: streamConfig.gifts?.welcome_recipients !== false,
+};
 
 // ---------------------------------------------------------------------------
 // Env validation
@@ -262,13 +273,8 @@ function buildItemEntry(itemName, opts = {}) {
   };
 }
 
-async function grantLoot(username, displayName, tableName, trigger, announcement, channel) {
-  const itemName = lootRoller.hasTable(tableName) ? lootRoller.roll(tableName) : null;
-  if (!itemName) {
-    logger.warn(`[loot] No item rolled from table "${tableName}" for ${username}`);
-    return;
-  }
-
+/** Grant a specific already-rolled item name as a chat-participant item. */
+async function grantItemReward(username, displayName, itemName, trigger, announcement, channel) {
   const safe = sanitize(itemName, 80);
   logger.info(`[loot] ${trigger} → ${username} receives ${safe}`);
 
@@ -287,12 +293,22 @@ async function grantLoot(username, displayName, tableName, trigger, announcement
   }
 }
 
+async function grantLoot(username, displayName, tableName, trigger, announcement, channel) {
+  const itemName = lootRoller.hasTable(tableName) ? lootRoller.roll(tableName) : null;
+  if (!itemName) {
+    logger.warn(`[loot] No item rolled from table "${tableName}" for ${username}`);
+    return;
+  }
+  await grantItemReward(username, displayName, itemName, trigger, announcement, channel);
+}
+
 // ---------------------------------------------------------------------------
 // Startup
 // ---------------------------------------------------------------------------
 let twitchClient = null;
 let commandParser = null;
 let eventSubClient = null;
+let eventRewards = null;
 let arena = null;
 let progression = null;
 let questManager = null;
@@ -483,37 +499,30 @@ async function main() {
   }
 
   if (eventSubClient) {
-    eventSubClient.on('sub', async ({ username, displayName, months, gifted, gifterDisplay }) => {
-      const valid = validateUsername(username);
-      if (!valid) return;
-      const trigger   = gifted ? 'gifted_sub' : months > 1 ? 'resub' : 'sub';
-      const announce  = gifted
-        ? (dn, item) => `${gifterDisplay ?? '?'} gifted a sub to ${dn}! They receive ${item}!`
-        : (dn, item) => `${dn} subscribed${months > 1 ? ` (${months} months!)` : ''}! They receive ${item}!`;
-
-      // Server-managed reward table first; local loot-tables.json fallback.
-      const entry = rewardConfig ? rollRewardEntry(rewardConfig.sub) : null;
-      if (entry) {
-        await grantPowerReward(valid, displayName, entry, trigger, announce, channel);
-        return;
-      }
-      const tableName = lootTables.sub ? 'sub' : 'default';
-      await grantLoot(valid, displayName, tableName, trigger, announce, channel);
+    // Sub / gift-sub rewards (see eventRewards.js): self-subs and resubs roll
+    // the single-sub table once (deduped when both channel.subscribe and
+    // channel.subscription.message arrive for the same renewal); gift batches
+    // reward the GIFTER from the gift-count tiers; recipients never roll and
+    // get at most one collective welcome line.
+    eventRewards = new EventRewards({
+      getRewardConfig: () => rewardConfig,
+      lootRoller,
+      lootTables,
+      grantPowerReward: (u, dn, entry, trigger, announce) =>
+        grantPowerReward(u, dn, entry, trigger, announce, channel),
+      grantItemReward: (u, dn, item, trigger, announce) =>
+        grantItemReward(u, dn, item, trigger, announce, channel),
+      isJoined: async (username) => {
+        const res = await gameClient.send('chat_participant_resolve', { name: username });
+        return !!res?.found;
+      },
+      say: (line) => {
+        if (twitchClient) twitchClient.say(channel, line);
+      },
+      logger,
+      giftConfig: GIFT_CONFIG,
     });
-
-    // Gift-sub batches: the GIFTER earns a reward from the tier matching how
-    // many subs they gave (1 / 5 / 10+ by default). Each recipient still gets
-    // a normal sub reward via the 'sub' event above.
-    eventSubClient.on('giftsub', async ({ username, displayName, total }) => {
-      const valid = validateUsername(username);
-      if (!valid || !rewardConfig) return;
-      const count = Math.max(1, Number(total) || 1);
-      const tier = pickRewardTier(rewardConfig.gift_tiers, 'min_count', count);
-      const entry = tier ? rollRewardEntry(tier.table) : null;
-      if (!entry) return;
-      const announce = (dn, item) => `${dn} gifted ${count} sub${count > 1 ? 's' : ''} and receives ${item}!`;
-      await grantPowerReward(valid, displayName, entry, `gift_x${count}`, announce, channel);
-    });
+    eventRewards.attach(eventSubClient);
 
     eventSubClient.on('bits', async ({ username, displayName, amount }) => {
       const valid = validateUsername(username);
@@ -588,6 +597,7 @@ function shutdown() {
   if (arena) arena.destroy();
   if (questManager) questManager.destroy();
   gameClient.stop();
+  if (eventRewards) eventRewards.destroy();
   if (eventSubClient) eventSubClient.stop();
   process.exit(0);
 }

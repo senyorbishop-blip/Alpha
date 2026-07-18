@@ -1,3 +1,8 @@
 {
-  "full_chat_narration": false
+  "full_chat_narration": false,
+  "gifts": {
+    "anonymous_mode": "skip",
+    "cumulative": false,
+    "welcome_recipients": true
+  }
 }
