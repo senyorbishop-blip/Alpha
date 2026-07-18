@@ -183,22 +183,31 @@ _ITEM_POWER_KEYWORDS = [
     ("fireball", "fireball"),
     ("meteor", "meteor_pop"),
     ("chain lightning", "chain_lightning"),
+    ("lightning bolt", "lightning_bolt"),
     ("lightning", "chain_lightning"),
     ("superior heal", "battle_blessing"),
     ("greater heal", "battle_blessing"),
     ("blessing", "battle_blessing"),
+    ("bless", "battle_blessing"),
+    ("healing word", "healing_spark"),
     ("heal", "healing_spark"),
     ("potion", "healing_spark"),
+    ("shield", "shield"),
+    ("sleep", "sleep"),
+    ("slumber", "sleep"),
     ("freeze", "flash_freeze"),
-    ("frost", "flash_freeze"),
+    ("ray of frost", "ray_of_frost"),
+    ("frost", "ray_of_frost"),
     ("trip", "trip_hex"),
     ("caltrop", "trip_hex"),
+    ("grease", "goo_burst"),
     ("goo", "goo_burst"),
     ("net", "goo_burst"),
+    ("fog", "smoke_burst"),
     ("smoke", "smoke_burst"),
     ("horn", "knockback"),
     ("ram", "knockback"),
-    ("magic missile", "arcane_zap"),
+    ("magic missile", "magic_missile"),
     ("wand", "arcane_zap"),
     ("scroll", "arcane_zap"),
     ("staff", "arcane_zap"),
@@ -252,30 +261,61 @@ def _item_display_names(items: list) -> list:
     return names
 
 
-def _match_inventory_item(inventory: list, name_query: str):
+def _power_alias_lookup(session: Session) -> dict:
+    """lower-cased power name → its alternate names (both directions).
+
+    Built from the power defs' config-driven aliases so !use matches either
+    the shipped name or the familiar D&D one (Healing Spark ↔ Healing Word,
+    Battle Blessing ↔ Bless, Goo Burst ↔ Grease, Smoke Burst ↔ Fog Cloud).
+    """
+    from server.handlers.viewer_powers import _viewer_power_defs, viewer_power_all_names
+
+    lookup: dict = {}
+    for pid, power in _viewer_power_defs(session).items():
+        names = viewer_power_all_names(pid, power)
+        if len(names) < 2:
+            continue
+        for name in names:
+            low = name.lower()
+            existing = lookup.setdefault(low, [])
+            for other in names:
+                if other.lower() != low and other not in existing:
+                    existing.append(other)
+    return lookup
+
+
+def _match_inventory_item(inventory: list, name_query: str, alias_lookup: dict | None = None):
     """
     Case-insensitive prefix/fuzzy match of an item name against the chatter's
     own usable inventory. Exact name wins, then whole-name prefix, then
-    substring / word-prefix. Returns (item, None) on a unique match,
-    (None, error_dict) otherwise — the error dict carries name lists so the
-    bridge can render its "ambiguous item" / "not owned" chat templates.
+    substring / word-prefix. Items also answer to power-name aliases via
+    alias_lookup (lower name → alternate names). Returns (item, None) on a
+    unique match, (None, error_dict) otherwise — the error dict carries name
+    lists so the bridge can render its "ambiguous item" / "not owned" chat
+    templates.
     """
     usable = _usable_items(inventory)
     owned = _item_display_names(usable)
     query = str(name_query or "").strip().lower()
 
-    def name_of(item):
-        return str(item.get("name") or "").strip().lower()
+    def names_of(item):
+        name = str(item.get("name") or "").strip().lower()
+        names = [name] if name else []
+        for alt in (alias_lookup or {}).get(name, []):
+            low = str(alt or "").strip().lower()
+            if low and low not in names:
+                names.append(low)
+        return names
 
-    exact = [i for i in usable if name_of(i) == query]
+    exact = [i for i in usable if query in names_of(i)]
     if exact:
         return exact[0], None
 
-    pool = [i for i in usable if name_of(i).startswith(query)]
+    pool = [i for i in usable if any(n.startswith(query) for n in names_of(i))]
     if not pool:
         pool = [
             i for i in usable
-            if query in name_of(i) or any(w.startswith(query) for w in name_of(i).split())
+            if any(query in n or any(w.startswith(query) for w in n.split()) for n in names_of(i))
         ]
     if not pool:
         return None, {
@@ -294,10 +334,11 @@ def _match_inventory_item(inventory: list, name_query: str):
 
 
 # Power kinds that hurt or hinder the target. Anything else (heals, blessings,
-# item gifts) is a support power and is always allowed on party tokens.
+# shields, item gifts) is a support power and is always allowed on party tokens.
 _HOSTILE_POWER_KINDS = {
     "single_damage", "area_damage", "chain_damage",
     "single_status", "area_status", "knockback",
+    "single_damage_status", "line_damage",
 }
 
 
@@ -552,7 +593,7 @@ async def handle_chat_participant_target(payload: dict, session: Session, user: 
         return
 
     if raw_item:
-        item, item_err = _match_inventory_item(participant.inventory, raw_item)
+        item, item_err = _match_inventory_item(participant.inventory, raw_item, _power_alias_lookup(session))
         if item_err:
             await manager.send_to(session.id, user.id, {
                 "type": "chat_participant_target_result",
@@ -615,13 +656,64 @@ async def handle_chat_participant_target(payload: dict, session: Session, user: 
             }),
         })
         return
+    # Multi-step interactions: a power can declare follow-up questions in its
+    # def (e.g. Lightning Bolt's direction). When answers are missing, reply
+    # with the next question's spec so the bridge can run its generic
+    # pending-interaction flow; nothing is consumed until all answers arrive.
+    from server.handlers.viewer_powers import viewer_power_follow_ups, match_follow_up_answer
+    follow_ups = viewer_power_follow_ups(power)
+    raw_answers = payload.get("follow_up") if isinstance(payload.get("follow_up"), dict) else {}
+    answers: dict = {}
+    for fu in follow_ups:
+        fu_id = str(fu.get("id") or "")
+        raw_answer = str(raw_answers.get(fu_id) or "").strip()
+        if not raw_answer:
+            await manager.send_to(session.id, user.id, {
+                "type": "chat_participant_target_result",
+                "payload": _echo_req(payload, {
+                    "success": False, "error_code": "needs_follow_up",
+                    "message": f"{power.get('name', power_id)} needs a follow-up choice.",
+                    "power_id": power_id,
+                    "power_name": str(power.get("name") or power_id),
+                    "item_name": item_name,
+                    "target_name": target_name,
+                    "follow_up": {
+                        "id": fu_id,
+                        "prompt": str(fu.get("prompt") or "")[:200],
+                        "options": [
+                            {"value": str((o or {}).get("value") or ""),
+                             "aliases": [str(a) for a in ((o or {}).get("aliases") or [])]}
+                            for o in (fu.get("options") or [])
+                        ],
+                    },
+                }),
+            })
+            return
+        value = match_follow_up_answer(fu, raw_answer)
+        if value is None:
+            valid = ", ".join(str((o or {}).get("value") or "") for o in (fu.get("options") or []))
+            await manager.send_to(session.id, user.id, {
+                "type": "chat_participant_target_result",
+                "payload": _echo_req(payload, {
+                    "success": False, "error_code": "invalid_follow_up",
+                    "message": f"'{_sanitize(raw_answer)}' is not a valid choice — try one of: {valid}.",
+                }),
+            })
+            return
+        answers[fu_id] = value
+
     cx, cy = _token_center(token)
     target_desc = {
         "token_id": token.id,
         "x": cx,
         "y": cy,
         "map_context": _token_map_context(token),
+        **answers,
     }
+    # Line/area resolution respects the friendly-fire config per token hit,
+    # not just for the directly chosen target.
+    if not bool(getattr(session, "chat_friendly_fire", False)):
+        target_desc["block_party"] = True
 
     hp_before = getattr(token, "hp", None)
     try:
@@ -1100,6 +1192,36 @@ async def handle_chat_participant_me(payload: dict, session: Session, user: User
             "arena_stats": dict(participant.arena_stats or {}),
             "arena_character": dict(getattr(participant, "arena_character", None) or {}),
         }),
+    })
+
+
+# ---------------------------------------------------------------------------
+# Power description lookup  (role: chat_bridge — read-only, for !powers <name>)
+# ---------------------------------------------------------------------------
+
+async def handle_chat_bridge_power_info(payload: dict, session: Session, user: User):
+    """One-line DM-facing power description for the !powers <name> command.
+
+    Matches primary names and config-driven aliases (Bless, Healing Word, …).
+    """
+    from server.handlers.viewer_powers import find_viewer_power_by_name, viewer_power_all_names
+
+    raw_name = str(payload.get("name") or "").strip()
+    power_id, power = find_viewer_power_by_name(session, raw_name)
+    if not power:
+        out = {"found": False, "query": _sanitize(raw_name, 60)}
+    else:
+        names = viewer_power_all_names(power_id, power)
+        out = {
+            "found": True,
+            "power_id": power_id,
+            "name": names[0],
+            "aliases": names[1:],
+            "description": str(power.get("description") or "")[:220],
+        }
+    await manager.send_to(session.id, user.id, {
+        "type": "chat_bridge_power_info_result",
+        "payload": _echo_req(payload, out),
     })
 
 
@@ -2065,27 +2187,29 @@ def _default_chat_rewards_config() -> dict:
         "version": 1,
         # Single sub / resub / gift recipient: heals and support items.
         "sub": table(
-            ("healing_spark", 40), ("battle_blessing", 25),
-            ("give_potion", 20), ("pebble_toss", 15),
+            ("healing_spark", 30), ("battle_blessing", 20),
+            ("give_potion", 15), ("shield", 20), ("pebble_toss", 15),
         ),
         "gift_tiers": [
             {"min_count": 1, "table": table(
-                ("healing_spark", 30), ("battle_blessing", 20), ("give_potion", 15),
-                ("arcane_zap", 20), ("give_random_item", 15),
+                ("healing_spark", 25), ("battle_blessing", 15), ("give_potion", 15),
+                ("arcane_zap", 15), ("magic_missile", 15), ("give_random_item", 15),
             )},
             {"min_count": 5, "table": table(
-                ("battle_blessing", 20), ("arcane_zap", 20), ("give_random_item", 15),
-                ("fireball", 15), ("trip_hex", 10), ("smoke_burst", 10), ("knockback", 10),
+                ("battle_blessing", 15), ("arcane_zap", 15), ("give_random_item", 10),
+                ("fireball", 10), ("trip_hex", 10), ("smoke_burst", 10), ("knockback", 10),
+                ("ray_of_frost", 10), ("sleep", 10),
             )},
             {"min_count": 10, "table": all_powers},
         ],
         "bits_tiers": [
             {"threshold": 100, "table": table(
-                ("pebble_toss", 50), ("arcane_zap", 30), ("healing_spark", 20),
+                ("pebble_toss", 40), ("arcane_zap", 20), ("magic_missile", 20), ("healing_spark", 20),
             )},
             {"threshold": 500, "table": table(
-                ("arcane_zap", 25), ("battle_blessing", 25), ("trip_hex", 20),
-                ("goo_burst", 15), ("fireball", 15),
+                ("arcane_zap", 15), ("battle_blessing", 15), ("trip_hex", 15),
+                ("goo_burst", 10), ("fireball", 15), ("ray_of_frost", 15),
+                ("sleep", 10), ("lightning_bolt", 5),
             )},
             {"threshold": 1000, "table": all_powers},
         ],

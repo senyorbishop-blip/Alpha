@@ -183,6 +183,8 @@ CHAT_BRIDGE_ALLOWED_MESSAGE_TYPES = frozenset({
     "chat_participant_graveyard",
     # DM-configured reward tables (read-only fetch for sub/gift/bits rolls)
     "chat_bridge_rewards_get",
+    # Power description lookup for !powers <name> (read-only)
+    "chat_bridge_power_info",
     # Arena display event relay (broadcast to overlays, no state change)
     "arena_display_event",
 })

@@ -40,9 +40,43 @@ VIEWER_BASE_POWER_DEFS = {
     "give_potion": {"name": "Give Potion", "kind": "grant_item", "dice": (1, 1), "amount": 0, "target_mode": "token", "approval_default": False, "description": "Give the targeted player token a Potion of Minor Healing (heals 1d4).", "cooldown_sec": 0, "item_payload": {"name": "Potion of Minor Healing", "notes": "Heals 1d4 HP when used", "qty": 1}},
     "chain_lightning": {"name": "Chain Lightning", "kind": "chain_damage", "dice": (4, 6), "amount": 0, "target_mode": "token", "approval_default": True, "save": "dex", "save_dc": 17, "save_half": True, "chain_min": 4, "chain_max": 6, "chain_radius_ft": 30, "description": "Strike one token, then arc to nearby tokens — bouncing between 4 and 6 in all. Each takes 4d6 lightning damage; Dex save DC 17 for half.", "cooldown_sec": 90},
     "give_random_item": {"name": "Give Random Item", "kind": "grant_random_item", "dice": (1, 1), "amount": 0, "target_mode": "token", "approval_default": False, "description": "Give the targeted player token a random item drawn from the item library.", "cooldown_sec": 30},
+    "magic_missile": {"name": "Magic Missile", "kind": "single_damage", "dice": (3, 4), "amount": 3, "target_mode": "token", "approval_default": False, "description": "Three darts of force strike one target unerringly — 3d4+3 force damage, no attack roll, never misses.", "cooldown_sec": 30},
+    "shield": {"name": "Shield", "kind": "support_status", "dice": (1, 1), "amount": 0, "target_mode": "token", "approval_default": False, "condition": "shielded", "duration_sec": 60, "description": "Ward a party member: an invisible barrier absorbs the next incoming attack (negates its damage) within 60 seconds.", "cooldown_sec": 30},
+    "ray_of_frost": {"name": "Ray of Frost", "kind": "single_damage_status", "dice": (1, 8), "amount": 0, "target_mode": "token", "approval_default": False, "condition": "slowed", "duration_sec": 30, "description": "A beam of frigid cold deals 1d8 cold damage and slows the target (halved movement) for 30 seconds.", "cooldown_sec": 30},
+    "sleep": {"name": "Sleep", "kind": "single_status", "dice": (1, 1), "amount": 0, "target_mode": "token", "approval_default": False, "condition": "asleep", "duration_sec": 30, "save": "wis", "save_dc": 12, "save_negates": True, "description": "Lull one target into a magical slumber for 30 seconds (skips its turn) unless it passes a WIS save DC 12.", "cooldown_sec": 45},
+    "lightning_bolt": {
+        "name": "Lightning Bolt", "kind": "line_damage", "dice": (2, 6), "amount": 1,
+        "target_mode": "token", "approval_default": True, "save": "dex", "save_dc": 13, "save_half": True,
+        "line_length_squares": 6,
+        "description": "A bolt tears through the target and everything in a line behind it (6 squares, pick the direction) — 2d6+1 lightning damage; Dex save DC 13 for half.",
+        "cooldown_sec": 90,
+        "follow_ups": [{
+            "id": "direction",
+            "prompt": "which direction? Reply: left / right / up / down",
+            "options": [
+                {"value": "left", "aliases": ["l", "west", "w", "←", "⬅", "⬅️"]},
+                {"value": "right", "aliases": ["r", "east", "e", "→", "➡", "➡️"]},
+                {"value": "up", "aliases": ["u", "north", "n", "↑", "⬆", "⬆️"]},
+                {"value": "down", "aliases": ["d", "south", "s", "↓", "⬇", "⬇️"]},
+            ],
+        }],
+    },
 }
+
+# Alternate D&D-familiar names for shipped powers (config-driven display
+# aliases). !use and !powers match either the primary name or any alias.
+VIEWER_POWER_NAME_ALIASES = {
+    "healing_spark": ["Healing Word"],
+    "battle_blessing": ["Bless"],
+    "goo_burst": ["Grease"],
+    "smoke_burst": ["Fog Cloud"],
+}
+for _pid, _aliases in VIEWER_POWER_NAME_ALIASES.items():
+    if _pid in VIEWER_BASE_POWER_DEFS:
+        VIEWER_BASE_POWER_DEFS[_pid]["aliases"] = list(_aliases)
+
 VIEWER_POWER_DEFS = VIEWER_BASE_POWER_DEFS
-_ALLOWED_VIEWER_POWER_KINDS = {"single_damage", "single_heal", "area_damage", "single_status", "area_status", "knockback", "grant_item", "chain_damage", "grant_random_item"}
+_ALLOWED_VIEWER_POWER_KINDS = {"single_damage", "single_heal", "area_damage", "single_status", "area_status", "knockback", "grant_item", "chain_damage", "grant_random_item", "support_status", "single_damage_status", "line_damage"}
 _ALLOWED_SAVE_TYPES = {"", "str", "dex", "con", "int", "wis", "cha"}
 _ALLOWED_AREA_SHAPES = {"burst", "cone", "line", "aura"}
 _KNOCKBACK_DIRS = [(1, 0), (-1, 0), (0, 1), (0, -1)]
@@ -57,6 +91,20 @@ _FX_COLOR_FOR_KIND = {
     'grant_item': '#fbbf24',
     'chain_damage': '#60a5fa',
     'grant_random_item': '#fbbf24',
+    'support_status': '#38bdf8',
+    'single_damage_status': '#7dd3fc',
+    'line_damage': '#60a5fa',
+}
+
+# Emoji shown by the overlay's brief condition flash on affected tokens.
+_CONDITION_FLASH_ICONS = {
+    'slowed': '❄️',
+    'asleep': '💤',
+    'shielded': '🛡️',
+    'blessed': '✨',
+    'prone': '⤵️',
+    'restrained': '🕸️',
+    'blinded': '🌫️',
 }
 
 
@@ -103,7 +151,12 @@ def _normalize_viewer_power_def(power_id: str, raw: dict | None) -> dict | None:
                 'notes': str(raw_item.get('notes') or '').strip()[:160],
                 'qty': max(1, min(99, int(raw_item.get('qty', 1) or 1))),
             }
-    return {
+    aliases = []
+    for alias in (raw.get('aliases') or [])[:6]:
+        a = str(alias or '').strip()[:60]
+        if a:
+            aliases.append(a)
+    norm = {
         'name': str(raw.get('name') or power_id).strip()[:60] or power_id,
         'kind': kind,
         'dice': (dice_num, dice_sides),
@@ -123,8 +176,18 @@ def _normalize_viewer_power_def(power_id: str, raw: dict | None) -> dict | None:
         'duration_sec': duration_sec,
         'cooldown_sec': cooldown_sec,
         'item_payload': item_payload,
+        'aliases': aliases,
         'custom': True,
     }
+    if kind == 'line_damage':
+        try:
+            norm['line_length_squares'] = max(1, min(20, int(raw.get('line_length_squares', 6) or 6)))
+        except Exception:
+            norm['line_length_squares'] = 6
+        # Any line power needs a direction chosen before it can resolve —
+        # reuse the same follow-up spec the shipped Lightning Bolt declares.
+        norm['follow_ups'] = [dict(fu) for fu in viewer_power_follow_ups(VIEWER_BASE_POWER_DEFS.get('lightning_bolt', {}))]
+    return norm
 
 
 def _viewer_power_defs(session: Session) -> dict:
@@ -359,7 +422,13 @@ def _build_target_descriptor(session: Session, power: dict, payload: dict):
     token = (session.tokens or {}).get(target_token_id)
     if not token or getattr(token, 'hidden', False):
         return None, 'Choose a visible target token.'
-    return {'mode': 'token', 'token_id': token.id, 'map_context': _token_map_context(token)}, None
+    descriptor = {'mode': 'token', 'token_id': token.id, 'map_context': _token_map_context(token)}
+    # Follow-up answers (e.g. a line power's direction) ride on the payload.
+    for fu in viewer_power_follow_ups(power):
+        answer = str(payload.get(fu['id']) or '').strip().lower()
+        if answer:
+            descriptor[fu['id']] = answer
+    return descriptor, None
 
 
 def _resolve_target_token(session: Session, target):
@@ -431,6 +500,139 @@ def _resolve_save(save_dc: int, save_bonus: int) -> tuple[int, bool]:
     roll = random.randint(1, 20)
     total = roll + int(save_bonus or 0)
     return total, total >= int(save_dc or 0)
+
+
+def viewer_power_all_names(power_id: str, power: dict) -> list[str]:
+    """Primary display name plus any config-driven aliases (e.g. Bless)."""
+    names = [str((power or {}).get('name') or power_id)]
+    seen = {names[0].lower()}
+    for alias in ((power or {}).get('aliases') or []):
+        a = str(alias or '').strip()
+        if a and a.lower() not in seen:
+            names.append(a)
+            seen.add(a.lower())
+    return names
+
+
+def find_viewer_power_by_name(session: Session, query: str):
+    """Match a chatter-typed power name against the session's power defs.
+
+    Matches primary names and aliases, case-insensitively: exact match wins,
+    then whole-name prefix, then substring. Returns (power_id, def) or
+    (None, None).
+    """
+    text = str(query or '').strip().lower()
+    if not text:
+        return None, None
+    defs = _viewer_power_defs(session)
+    exact, prefix, fuzzy = [], [], []
+    for pid, power in defs.items():
+        for name in viewer_power_all_names(pid, power):
+            low = name.lower()
+            if low == text:
+                exact.append(pid)
+            elif low.startswith(text):
+                prefix.append(pid)
+            elif text in low:
+                fuzzy.append(pid)
+    for pool in (exact, prefix, fuzzy):
+        if pool:
+            return pool[0], defs[pool[0]]
+    return None, None
+
+
+def viewer_power_follow_ups(power: dict) -> list[dict]:
+    """The follow-up questions a power requires before it can resolve.
+
+    Each entry: {id, prompt, options: [{value, aliases}]}. Declared in the
+    power def so the bridge's interaction state machine stays generic.
+    """
+    out = []
+    for fu in ((power or {}).get('follow_ups') or []):
+        if isinstance(fu, dict) and str(fu.get('id') or '').strip():
+            out.append(fu)
+    return out
+
+
+def match_follow_up_answer(fu: dict, raw: str) -> str | None:
+    """Normalize a chatter's follow-up reply to an option value, or None."""
+    text = str(raw or '').strip().lower()
+    if not text:
+        return None
+    for opt in ((fu or {}).get('options') or []):
+        value = str((opt or {}).get('value') or '').strip().lower()
+        if not value:
+            continue
+        if text == value:
+            return value
+        for alias in ((opt or {}).get('aliases') or []):
+            if text == str(alias or '').strip().lower():
+                return value
+    return None
+
+
+def _token_shield_active(token) -> bool:
+    """True when the token carries an unexpired 'shielded' condition."""
+    _prune_token_condition_timers(token)
+    return 'shielded' in (getattr(token, 'conditions', None) or [])
+
+
+_LINE_DIR_VECTORS = {'left': (-1, 0), 'right': (1, 0), 'up': (0, -1), 'down': (0, 1)}
+_LINE_DIR_WORDS = {'left': 'leftward', 'right': 'rightward', 'up': 'upward', 'down': 'downward'}
+
+
+def _line_victims(session: Session, power: dict, origin_token, direction: str, block_party: bool) -> list:
+    """Tokens hit by a line from the origin token's square in `direction`.
+
+    The line extends line_length_squares grid squares; any visible token whose
+    center lies within half a grid square of the segment is hit. When
+    block_party is set (chat friendly-fire off), party tokens are skipped.
+    """
+    from server.handlers.chat_bridge import _is_party_token
+    ux, uy = _LINE_DIR_VECTORS.get(direction, (1, 0))
+    length_px = max(1.0, float(power.get('line_length_squares', 6) or 6)) * PX_PER_GRID
+    ox, oy = _token_center(origin_token)
+    ex, ey = ox + ux * length_px, oy + uy * length_px
+    map_context = _token_map_context(origin_token)
+    victims = []
+    for cand in (session.tokens or {}).values():
+        if getattr(cand, 'hidden', False) or getattr(cand, 'staged', False):
+            continue
+        if _token_map_context(cand) != map_context:
+            continue
+        if block_party and _is_party_token(cand):
+            continue
+        if cand.id == origin_token.id:
+            victims.append((0.0, cand))
+            continue
+        ccx, ccy = _token_center(cand)
+        if _distance_point_to_segment(ccx, ccy, ox, oy, ex, ey) <= (PX_PER_GRID / 2.0):
+            forward = ((ccx - ox) * ux) + ((ccy - oy) * uy)
+            victims.append((forward, cand))
+    victims.sort(key=lambda pair: pair[0])
+    return [cand for _, cand in victims]
+
+
+def _best_line_direction(session: Session, power: dict, origin_token, block_party: bool) -> str:
+    """Fallback when no direction was chosen (e.g. viewer-panel use): pick
+    the direction that catches the most targets."""
+    best_dir, best_count = 'right', -1
+    for direction in ('left', 'right', 'up', 'down'):
+        count = len(_line_victims(session, power, origin_token, direction, block_party))
+        if count > best_count:
+            best_dir, best_count = direction, count
+    return best_dir
+
+
+async def _broadcast_condition_flash(session: Session, token, condition: str):
+    """Brief overlay icon flash on a token that just gained a condition."""
+    cond = _sanitize_condition_id(condition)
+    tcx, tcy = _token_center(token)
+    await _broadcast_viewer_fx(session, 'condition_flash', {
+        'x': tcx, 'y': tcy, 'token_id': token.id,
+        'condition': cond, 'icon': _CONDITION_FLASH_ICONS.get(cond, '✳️'),
+        'label': cond,
+    })
 
 
 def _distance_point_to_segment(px: float, py: float, ax: float, ay: float, bx: float, by: float) -> float:
@@ -536,14 +738,20 @@ async def _resolve_viewer_power(session: Session, actor_name: str, power_id: str
         token = _resolve_target_token(session, target)
         if not token:
             return None, 'Choose a visible target token.'
+        had_shield = _token_shield_active(token)
         previous_hp = getattr(token, 'hp', None)
         _apply_damage(token, total)
         combat_dirty = _sync_combatant_token_state(session, token, previous_hp=previous_hp) or combat_dirty
         affected = [token]
         tcx, tcy = _token_center(token)
         fx_kind = 'lightning_strike' if power_id == 'arcane_zap' else 'projectile'
-        await _broadcast_viewer_fx(session, fx_kind, {'x': tcx, 'y': tcy, 'x1': tcx - 280, 'y1': tcy - 180, 'x2': tcx, 'y2': tcy, 'token_id': token.id, 'label': f"-{total}", 'color': '#ff8a65'})
-        msg = f"{actor_name} used {power['name']} on {token.name} for {total} damage ({'+'.join(map(str, rolls))})."
+        fx_label = '🛡 ABSORBED' if had_shield else f"-{total}"
+        await _broadcast_viewer_fx(session, fx_kind, {'x': tcx, 'y': tcy, 'x1': tcx - 280, 'y1': tcy - 180, 'x2': tcx, 'y2': tcy, 'token_id': token.id, 'label': fx_label, 'color': '#ff8a65'})
+        if had_shield:
+            await _broadcast_token_condition_state(session, token)
+            msg = f"{actor_name} used {power['name']} on {token.name} — but {token.name}'s shield flares and absorbs the blow!"
+        else:
+            msg = f"{actor_name} used {power['name']} on {token.name} for {total} damage ({'+'.join(map(str, rolls))})."
     elif power['kind'] == 'chain_damage':
         token = _resolve_target_token(session, target)
         if not token:
@@ -617,6 +825,108 @@ async def _resolve_viewer_power(session: Session, actor_name: str, power_id: str
         tcx, tcy = _token_center(token)
         await _broadcast_viewer_fx(session, 'healing_spark', {'x': tcx, 'y': tcy, 'token_id': token.id, 'label': f"+{total}", 'amount': total})
         msg = f"{actor_name} used {power['name']} on {token.name} for {total} healing ({'+'.join(map(str, rolls))})."
+    elif power['kind'] == 'support_status':
+        token = _resolve_target_token(session, target)
+        if not token:
+            return None, 'Choose a visible target token.'
+        _prune_token_condition_timers(token)
+        cond = _sanitize_condition_id(power.get('condition'))
+        if not cond:
+            return None, 'This viewer power has no condition set.'
+        duration = int(power.get('duration_sec', 0) or 0)
+        _set_token_condition(token, cond, duration)
+        affected = [token]
+        tcx, tcy = _token_center(token)
+        await _broadcast_viewer_fx(session, 'projectile', {'x': tcx, 'y': tcy, 'x1': tcx - 280, 'y1': tcy - 280, 'x2': tcx, 'y2': tcy, 'token_id': token.id, 'label': power['name'], 'color': '#38bdf8'})
+        await _broadcast_token_condition_state(session, token)
+        await _broadcast_condition_flash(session, token, cond)
+        duration_text = f" for {duration}s" if duration > 0 else ''
+        if cond == 'shielded':
+            msg = f"🛡 {actor_name} cast {power['name']} on {token.name} — the next incoming attack will be absorbed{duration_text}."
+        else:
+            msg = f"{actor_name} cast {power['name']} on {token.name}, granting {cond}{duration_text}."
+    elif power['kind'] == 'single_damage_status':
+        token = _resolve_target_token(session, target)
+        if not token:
+            return None, 'Choose a visible target token.'
+        _prune_token_condition_timers(token)
+        cond = _sanitize_condition_id(power.get('condition'))
+        save_dc = int(power.get('save_dc', 0) or 0)
+        save_type = str(power.get('save') or '').strip().lower()
+        save_total = None
+        saved = False
+        if save_type:
+            save_bonus = _token_save_bonus(session, token, save_type)
+            save_total, saved = _resolve_save(save_dc, save_bonus)
+        applied = total // 2 if (saved and power.get('save_half')) else total
+        had_shield = _token_shield_active(token)
+        previous_hp = getattr(token, 'hp', None)
+        _apply_damage(token, applied)
+        combat_dirty = _sync_combatant_token_state(session, token, previous_hp=previous_hp) or combat_dirty
+        affected = [token]
+        tcx, tcy = _token_center(token)
+        fx_label = '🛡 ABSORBED' if had_shield else f"-{applied}"
+        await _broadcast_viewer_fx(session, 'projectile', {'x': tcx, 'y': tcy, 'x1': tcx - 280, 'y1': tcy - 180, 'x2': tcx, 'y2': tcy, 'token_id': token.id, 'label': fx_label, 'color': '#7dd3fc'})
+        if had_shield:
+            # The shield absorbs the whole attack — damage and rider condition.
+            await _broadcast_token_condition_state(session, token)
+            msg = f"{actor_name} hit {token.name} with {power['name']} — but {token.name}'s shield flares and absorbs the blow!"
+        else:
+            duration = int(power.get('duration_sec', 0) or 0)
+            condition_applied = bool(cond) and not (saved and power.get('save_negates') and save_type)
+            if condition_applied:
+                _set_token_condition(token, cond, duration)
+                await _broadcast_token_condition_state(session, token)
+                await _broadcast_condition_flash(session, token, cond)
+            duration_text = f" for {duration}s" if duration > 0 else ''
+            save_text = f" ({save_type.upper()} save {save_total} vs DC {save_dc})" if save_total is not None else ''
+            cond_text = f", {cond}{duration_text}" if condition_applied else ''
+            msg = f"{actor_name} hit {token.name} with {power['name']} for {applied} damage ({'+'.join(map(str, rolls))}){cond_text}{save_text}."
+    elif power['kind'] == 'line_damage':
+        token = _resolve_target_token(session, target)
+        if not token:
+            return None, 'Choose a visible target token.'
+        direction = str((target or {}).get('direction') or '').strip().lower()
+        block_party = bool((target or {}).get('block_party'))
+        if direction not in _LINE_DIR_VECTORS:
+            direction = _best_line_direction(session, power, token, block_party)
+        victims = _line_victims(session, power, token, direction, block_party)
+        ux, uy = _LINE_DIR_VECTORS[direction]
+        length_px = max(1.0, float(power.get('line_length_squares', 6) or 6)) * PX_PER_GRID
+        ox, oy = _token_center(token)
+        ex, ey = ox + ux * length_px, oy + uy * length_px
+        save_dc = int(power.get('save_dc', 0) or 0)
+        save_type = str(power.get('save') or '').strip().lower()
+        await _broadcast_viewer_fx(session, 'line_effect', {
+            'x': ox, 'y': oy, 'x1': ox, 'y1': oy, 'x2': ex, 'y2': ey,
+            'label': power['name'], 'color': '#60a5fa', 'width_px': PX_PER_GRID * 0.6,
+            'map_context': _token_map_context(token),
+        })
+        hit_summaries = []
+        for cand in victims:
+            saved = False
+            save_total = None
+            if save_type:
+                save_bonus = _token_save_bonus(session, cand, save_type)
+                save_total, saved = _resolve_save(save_dc, save_bonus)
+            applied = total // 2 if (saved and power.get('save_half')) else total
+            had_shield = _token_shield_active(cand)
+            previous_hp = getattr(cand, 'hp', None)
+            _apply_damage(cand, applied)
+            combat_dirty = _sync_combatant_token_state(session, cand, previous_hp=previous_hp) or combat_dirty
+            ccx, ccy = _token_center(cand)
+            label = '🛡 ABSORBED' if had_shield else f"-{applied}"
+            await _broadcast_viewer_fx(session, 'lightning_strike', {'x': ccx, 'y': ccy, 'x1': ox, 'y1': oy, 'x2': ccx, 'y2': ccy, 'token_id': cand.id, 'label': label, 'color': '#60a5fa'})
+            if had_shield:
+                await _broadcast_token_condition_state(session, cand)
+                hit_summaries.append(f"{cand.name} (shield absorbs it)")
+            else:
+                hit_summaries.append(f"{cand.name} ({'save ' + str(save_total) + ' → ' if save_total is not None else ''}{applied} dmg{' half' if saved and power.get('save_half') else ''})")
+            affected.append(cand)
+        names = ', '.join(hit_summaries[:6]) + ('…' if len(hit_summaries) > 6 else '')
+        save_text = f" {save_type.upper()} save DC {save_dc} for half." if save_type and save_dc else ''
+        dir_word = _LINE_DIR_WORDS.get(direction, direction)
+        msg = f"⚡ {actor_name}'s {power['name']} tears {dir_word} through {names or 'empty air'} — {total} lightning damage ({'+'.join(map(str, rolls))}).{save_text}"
     elif power['kind'] in {'area_damage', 'area_status'}:
         map_context = str((target or {}).get('map_context') or getattr(session, 'dm_map_context', 'world') or 'world')
         shape = str(power.get('area_shape') or 'burst').strip().lower()
@@ -700,10 +1010,16 @@ async def _resolve_viewer_power(session: Session, actor_name: str, power_id: str
             save_bonus = _token_save_bonus(session, token, save_type)
             save_total, saved = _resolve_save(save_dc, save_bonus)
         duration_text = f" for {int(power.get('duration_sec', 0) or 0)}s" if int(power.get('duration_sec', 0) or 0) > 0 else ''
-        save_text = f" {save_type.upper()} save {save_total} negated it" if save_total is not None and saved and power.get('save_negates') else ''
-        if not (saved and power.get('save_negates')):
+        # Both save outcomes are announced with the roll (e.g. Sleep).
+        save_text = ''
+        if save_total is not None:
+            outcome = 'resisted!' if (saved and power.get('save_negates')) else 'failed'
+            save_text = f" ({save_type.upper()} save {save_total} vs DC {save_dc}: {outcome})"
+        negated = bool(save_type) and saved and power.get('save_negates')
+        if not negated:
             _set_token_condition(token, cond, int(power.get('duration_sec', 0) or 0))
-        if power_id == 'trip_hex' and not (saved and power.get('save_negates')):
+            await _broadcast_condition_flash(session, token, cond)
+        if power_id == 'trip_hex' and not negated:
             bonus_dmg, bonus_rolls = _roll_simple(1, 6, 0)
             previous_hp = getattr(token, 'hp', None)
             _apply_damage(token, bonus_dmg)
@@ -711,6 +1027,8 @@ async def _resolve_viewer_power(session: Session, actor_name: str, power_id: str
             tcx, tcy = _token_center(token)
             await _broadcast_viewer_fx(session, 'damage_number', {'x': tcx, 'y': tcy, 'token_id': token.id, 'label': f"-{bonus_dmg}", 'color': '#ff8a65'})
             msg = f"{actor_name} used {power['name']} on {token.name}, applying {cond}{duration_text} and dealing {bonus_dmg} bonus damage ({'+'.join(map(str, bonus_rolls))}){save_text}."
+        elif negated:
+            msg = f"{actor_name} used {power['name']} on {token.name} — {token.name} resists{save_text}."
         else:
             msg = f"{actor_name} used {power['name']} on {token.name}, applying {cond}{duration_text}{save_text}."
         affected = [token]
