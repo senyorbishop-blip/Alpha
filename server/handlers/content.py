@@ -1126,6 +1126,16 @@ async def handle_request_state(payload: dict, session: Session, user: User):
 
     reason = str((payload or {}).get("reason") or "").strip().lower()
     known_revisions = (payload or {}).get("known_revisions")
+    if reason == "seq_gap":
+        # The client saw an outbound seq jump — at least one push to it was
+        # lost (e.g. reaped-send window). Logged at WARNING so gap frequency
+        # is visible in ops logs; the delta response below repairs the client.
+        gap = (payload or {}).get("seq_gap")
+        gap = gap if isinstance(gap, dict) else {}
+        logger.warning(
+            "[live_state] seq_gap_resync session_id=%s user_id=%s role=%s expected_seq=%s received_seq=%s",
+            session.id, user.id, user.role, gap.get("expected"), gap.get("received"),
+        )
     now = time.monotonic()
     last_initial = float(getattr(user, "_last_initial_state_sync_at", 0.0) or 0.0)
     skip_duplicate_reconnect_state = reason == "reconnect" and last_initial and (now - last_initial) < 2.0
@@ -1136,7 +1146,7 @@ async def handle_request_state(payload: dict, session: Session, user: User):
         )
     else:
         state = session.to_state_dict_for_role(user.role, user.id)
-        apply_reconnect_delta(state, known_revisions if reason == "reconnect" else None)
+        apply_reconnect_delta(state, known_revisions if reason in ("reconnect", "seq_gap") else None)
         logger.info(
             "[live_state] request_state reason=%s delta=%s omitted_domains=%s summary=%s",
             reason, state.get("delta"), ",".join(state.get("omitted_domains") or []) or "none",

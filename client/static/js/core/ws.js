@@ -1,7 +1,7 @@
 (function (global) {
   'use strict';
 
-  const CORE_WS_VERSION = 'heartbeat-pong-v5-stream-readiness';
+  const CORE_WS_VERSION = 'heartbeat-pong-v6-seq-gap-watchdog';
   const WS_DEBUG = !!global.__LIVE_DEBUG__ || (global.localStorage && global.localStorage.getItem('dnd_live_debug') === '1');
   function wsDebugLog() { if (WS_DEBUG && global.console && console.debug) console.debug.apply(console, arguments); }
   console.info('[WS] core loaded version', CORE_WS_VERSION);
@@ -21,9 +21,21 @@
     onOpen: () => {},
     onClose: () => {},
     onCloseExpired: () => {},
+    onSeqGap: () => {},
     showToast: () => {},
   };
   let lifecycleHooksInstalled = false;
+
+  // ── Dead-connection defenses ───────────────────────────────────────────────
+  // Every server push carries a per-connection monotonic `seq` (reset to 1 on
+  // each new socket). A jump means at least one push to this client was lost —
+  // onSeqGap() repairs it through the request_state delta path without a
+  // reconnect. Independently, the server heartbeats every ~20s, so a socket
+  // with NO traffic at all for 45s is a dead downlink (half-open TCP: the
+  // browser still reports OPEN and onclose never fires on its own) — the
+  // watchdog closes it so the normal onclose → scheduleReconnect path runs.
+  const WATCHDOG_SILENCE_MS = 45000;
+  const SEQ_GAP_RESYNC_MIN_INTERVAL_MS = 5000;
 
   // ── Single WebSocket owner state ───────────────────────────────────────────
   // This module is the ONLY place that constructs a WebSocket. All boot modules
@@ -231,6 +243,52 @@
     try { socket.__clientSocketId = clientSocketId; } catch (_err) {}
     config.setSocket(socket);
 
+    // Per-socket push-loss tracking (see WATCHDOG_SILENCE_MS block above).
+    // Closure-scoped so a superseded socket's state can never bleed into its
+    // replacement: each new socket starts at seq 0 / a fresh watchdog.
+    let lastServerSeq = 0;
+    let lastSeqGapResyncAt = -Infinity; // first gap must always resync
+    let lastMessageAt = 0;
+    let watchdogTimer = null;
+
+    const clearWatchdog = () => {
+      if (watchdogTimer) { global.clearTimeout(watchdogTimer); watchdogTimer = null; }
+    };
+    const fireWatchdog = () => {
+      watchdogTimer = null;
+      if (config.getSocket() !== socket) return;
+      if (socket.readyState !== global.WebSocket.OPEN) return;
+      // Background tabs throttle timers, so this can fire long after arming
+      // even though websocket messages kept flowing (message events are not
+      // throttled). Only a genuinely silent socket is treated as dead.
+      const silentForMs = Date.now() - lastMessageAt;
+      if (silentForMs < WATCHDOG_SILENCE_MS) {
+        watchdogTimer = global.setTimeout(fireWatchdog, Math.max(1000, WATCHDOG_SILENCE_MS - silentForMs));
+        return;
+      }
+      console.warn('[WS] watchdog: no server traffic for', silentForMs, 'ms — closing dead socket to force reconnect');
+      closeSocket(socket, 4008, 'Client watchdog: no server traffic');
+    };
+    const armWatchdog = () => {
+      lastMessageAt = Date.now();
+      clearWatchdog();
+      watchdogTimer = global.setTimeout(fireWatchdog, WATCHDOG_SILENCE_MS);
+    };
+    const trackServerSeq = (msg) => {
+      if (!msg || typeof msg.seq !== 'number' || !isFinite(msg.seq)) return;
+      if (lastServerSeq > 0 && msg.seq > lastServerSeq + 1) {
+        const gap = { expected: lastServerSeq + 1, received: msg.seq };
+        console.warn('[WS] server seq gap — at least one push was missed, requesting resync', gap);
+        const now = Date.now();
+        if (now - lastSeqGapResyncAt >= SEQ_GAP_RESYNC_MIN_INTERVAL_MS) {
+          lastSeqGapResyncAt = now;
+          try { config.onSeqGap(gap); } catch (err) { console.warn('[WS] seq gap resync handler failed', err); }
+        }
+      }
+      // Never regress: a late out-of-order frame (seq <= last) is not a gap.
+      if (msg.seq > lastServerSeq) lastServerSeq = msg.seq;
+    };
+
     socket.onopen = () => {
       if (config.getSocket() !== socket) {
         closeSocket(socket, 1000, 'Superseded socket on open');
@@ -242,12 +300,14 @@
         global.__playerBootState.wsOpened = true;
         if (typeof global.__playerBootCheckpoint === 'function') global.__playerBootCheckpoint('PLAYER_BOOT_WS_OPEN');
       }
+      armWatchdog();
       config.onOpen();
       clearReconnectTimer();
       flushPendingMessages();
     };
 
     socket.onclose = (event) => {
+      clearWatchdog();
       if (config.getSocket() !== socket) return;
       lastCloseCode = event && event.code;
       lastCloseReason = (event && event.reason) || '';
@@ -290,6 +350,11 @@
       } catch (_err) {
         return;
       }
+      // Any decoded server frame (heartbeat included) proves the downlink is
+      // alive; re-arm the silence watchdog and run push-loss seq tracking
+      // before ping handling so heartbeats participate in both.
+      armWatchdog();
+      trackServerSeq(msg);
       // Server heartbeat: respond to {"type":"ping"} immediately with a pong on
       // the same socket, BEFORE any gameplay dispatch. This guarantees the server
       // sees liveness even while the legacy dispatcher is busy or guarded, which

@@ -10,7 +10,9 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
-DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 30.0
+# 20s (down from 30s) so at least two server→client pings land inside the
+# client's 45s no-traffic watchdog window (client/static/js/core/ws.js).
+DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 20.0
 DEFAULT_HEARTBEAT_TIMEOUT_SECONDS = 60.0
 MIN_HEARTBEAT_INTERVAL_SECONDS = 5.0
 MIN_HEARTBEAT_TIMEOUT_SECONDS = 30.0

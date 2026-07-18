@@ -49,7 +49,11 @@ let _reconnectTimer = null;
 const win = {{
   WebSocket: WebSocketCtor,
   location: {{ protocol: 'http:', host: 'localhost', hostname: 'localhost' }},
-  setTimeout: (fn, ms) => {{ setTimeoutCalls += 1; timeoutDelays.push(ms); const id = timers.length + 1; timers.push(fn); return id; }},
+  // The silence watchdog (ws.js) arms a ~45s timer on every open/message; it is
+  // covered by tests/test_ws_client_seq_watchdog.py. Exclude it (>= 40s) from
+  // the reconnect-timer accounting these storm tests assert on — reconnect
+  // backoff delays are capped at 30s so the two ranges cannot collide.
+  setTimeout: (fn, ms) => {{ if (ms < 40000) {{ setTimeoutCalls += 1; timeoutDelays.push(ms); }} const id = timers.length + 1; timers.push(fn); return id; }},
   clearTimeout: () => {{}},
   Math: Object.assign(Object.create(globalThis.Math), {{ random: () => 0.5 }}),
   addEventListener: () => {{}},

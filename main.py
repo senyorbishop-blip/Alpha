@@ -646,7 +646,13 @@ async def _websocket_heartbeat_loop(
     user_id: str,
     connection_id: str,
     last_pong: dict,
-    ping_interval: float = 30,
+    # 20s keeps the server→client heartbeat well inside the client's 45s
+    # silence watchdog (ws.js): at least two pings fit in every watchdog
+    # window, so a healthy-but-quiet session never trips a false reconnect,
+    # while a genuinely dead downlink is noticed client-side within ~45s.
+    # Like every push, pings are seq-stamped and bounded by the per-send
+    # timeout, so a wedged socket is reaped + closed by this loop too.
+    ping_interval: float = 20,
     pong_timeout: float = 60,
     connection_manager=manager,
 ):
