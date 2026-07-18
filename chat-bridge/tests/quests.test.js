@@ -560,13 +560,19 @@ describe('Arena — injuries and auto-potion', () => {
       bob:   { maxHp: 25, ac: 12, atkBonus: 1, startHp: 25, potions: 0 },
     });
     const twitch = makeTwitch();
-    const arena = new Arena({ twitchClient: twitch, progression, logger: silentLogger, config: {} });
+    // Slim narration (default): the duel-start line goes to the ticker, not chat.
+    const ticker = [];
+    const arena = new Arena({
+      twitchClient: twitch, progression, logger: silentLogger, config: {},
+      onTickerEvent: (category, text) => ticker.push({ category, text }),
+    });
     try {
       await arena._startDuelAsync(CH, 'alice', 'bob');
       const state = arena._activeDuels.get('alice');
       expect(state.participants.alice.hp).toBeLessThanOrEqual(18);
       expect(state.participants.alice.maxHp).toBe(30);
-      expect(twitch.said.some(s => s.msg.includes('@alice enters wounded (18/30 HP)'))).toBe(true);
+      expect(ticker.some(t => t.text.includes('alice enters wounded (18/30 HP)'))).toBe(true);
+      expect(twitch.said.some(s => s.msg.includes('ARENA DUEL'))).toBe(false);
     } finally {
       arena.destroy();
     }

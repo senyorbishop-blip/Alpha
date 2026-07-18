@@ -11,6 +11,10 @@ This project currently uses a practical founder-beta version format:
 ## [Unreleased]
 
 ### Added
+- Overlay event ticker: a rolling play-by-play feed (last ~5 lines, newest on top, ~8s fade, burst pacing) built into the Game Overlay browser source and also available as its own "Event Ticker" browser-source URL in the Stream panel. It carries duel round-by-round narration, quest departures/returns, reward rolls, level-ups, deaths, DM item grants, and chat item uses. Events carry server-stamped seq numbers so the overlay shows a "missed events" marker instead of silently dropping lines; the DM's arena quiet mode queues ticker events along with the chat announcements.
+
+### Changed
+- Chat narration is now slim by default: duels post ONE chat line total — the result with rewards folded in (e.g. "🏆 alice defeats bob in 4 rounds! +60 XP, +15 gold") — while the start and round-by-round messages appear on the ticker instead. Direct replies to a chatter's own commands stay in chat. Streamers can restore the classic round-by-round chat narration with `full_chat_narration: true` in `chat-bridge/config/stream.json` (or `CHAT_FULL_NARRATION=true`).
 - The game server now auto-starts the Twitch chat bridge as a supervised child process — no manual `npm start`. It spawns when a session has a connected Twitch channel with the chat bridge enabled, restarts crashed bridges with capped exponential backoff (marked failed after 5 retries), pipes bridge output into the server log with a `[chat-bridge]` prefix, and cleanly terminates the process tree (Windows-safe) on toggle-off, Twitch disconnect, or server shutdown.
 - Stream panel bridge status now shows running / starting / failed (with the last error line) / stopped, a recent-bridge-log view, and a "Restart bridge" button. A clear panel error appears when Node.js is not installed.
 - Manual `npm start` keeps working for development: the server skips auto-spawn when a bridge for the session is already connected.

@@ -89,7 +89,7 @@ const PROGRESSION_ACTIONS = new Set([
  * Response templates are loaded from config/responses.json.
  */
 class CommandParser {
-  constructor({ commandMap, responses, rateLimiter, gameClient, twitchClient, arenaHandler, progressionHandler, interactionTimeoutMs }) {
+  constructor({ commandMap, responses, rateLimiter, gameClient, twitchClient, arenaHandler, progressionHandler, interactionTimeoutMs, onTickerEvent }) {
     this._commandMap = commandMap;
     this._responses = { ...DEFAULT_RESPONSES, ...(responses ?? {}) };
     this._rate = rateLimiter;
@@ -97,6 +97,9 @@ class CommandParser {
     this._twitch = twitchClient;
     this._arenaHandler = arenaHandler || null;
     this._progressionHandler = progressionHandler || null;
+    // Overlay event ticker mirror for broadcast results (e.g. a fireball
+    // landing). Personal replies (errors, prompts, !inventory…) stay chat-only.
+    this._onTicker = onTickerEvent || (() => {});
     // Multi-step interactions (e.g. Lightning Bolt's direction): one pending
     // follow-up per user, resolved by a bare (un-prefixed) chat reply.
     this._interactions = new PendingInteractions({ timeoutMs: interactionTimeoutMs ?? 30000 });
@@ -363,15 +366,18 @@ class CommandParser {
     if (result?.success) {
       // Follow-up executions narrate the server's full recap ("⚡ Lightning
       // Bolt tears rightward through …"); plain uses keep the short template.
-      if (followUp && result.message) {
-        this._twitch.say(channel, String(result.message));
-      } else {
-        this._twitch.say(channel, this._t('target_hit', {
-          user: displayName,
-          item: result.item_name ?? 'item',
-          target: result.target_name ?? targetName,
-        }));
-      }
+      // Either way it's one completed-event line, mirrored to the ticker.
+      const line = (followUp && result.message)
+        ? String(result.message)
+        : this._t('target_hit', {
+            user: displayName,
+            item: result.item_name ?? 'item',
+            target: result.target_name ?? targetName,
+          });
+      this._twitch.say(channel, line);
+      try {
+        this._onTicker('power', line.replace(/@/g, ''));
+      } catch (err) { /* ticker is best-effort — never break the command */ }
     } else if (result?.error_code === 'no_item') {
       this._twitch.reply(channel, username, this._t('target_no_item', { user: displayName }));
     } else if (result?.error_code === 'not_joined') {

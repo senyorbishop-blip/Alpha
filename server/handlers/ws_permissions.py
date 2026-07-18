@@ -187,6 +187,8 @@ CHAT_BRIDGE_ALLOWED_MESSAGE_TYPES = frozenset({
     "chat_bridge_power_info",
     # Arena display event relay (broadcast to overlays, no state change)
     "arena_display_event",
+    # Overlay event ticker relay (broadcast to overlays, no state change)
+    "ticker_event",
 })
 
 PLAYER_KNOWN_GAMEPLAY_MESSAGE_TYPES = frozenset({

@@ -463,6 +463,7 @@ def init_db():
             "ALTER TABLE campaigns ADD COLUMN twitch_chat_enabled INTEGER NOT NULL DEFAULT 1",
             "ALTER TABLE campaigns ADD COLUMN overlay_game_token TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE campaigns ADD COLUMN overlay_arena_token TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE campaigns ADD COLUMN overlay_ticker_token TEXT NOT NULL DEFAULT ''",
         ]:
             try:
                 conn.execute(migration)
@@ -529,6 +530,7 @@ def init_db():
             twitch_chat_enabled INTEGER NOT NULL DEFAULT 1,
             overlay_game_token TEXT NOT NULL DEFAULT '',
             overlay_arena_token TEXT NOT NULL DEFAULT '',
+            overlay_ticker_token TEXT NOT NULL DEFAULT '',
             dm_id TEXT,
             dm_player_key TEXT
         );

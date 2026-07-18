@@ -4,9 +4,10 @@ server/overlay_routes.py — OBS browser-source overlay pages and URL management
 Routes:
   GET  /overlay/game?session=<id>&key=<token>   — serve game overlay HTML
   GET  /overlay/arena?session=<id>&key=<token>  — serve arena overlay HTML
+  GET  /overlay/ticker?session=<id>&key=<token> — serve standalone event-ticker HTML
   GET  /api/overlay/urls/{session_id}            — return overlay URLs (DM only)
   POST /api/overlay/regenerate/{session_id}      — regenerate a token (DM only)
-                                                   query: ?type=game|arena
+                                                   query: ?type=game|arena|ticker
 
 Overlay pages are transparent, idle-invisible OBS browser sources.  Each URL
 embeds a per-campaign secret token that the server validates before issuing a
@@ -83,32 +84,40 @@ def _resolve_dm(request: Request, session_id: str) -> bool:
     return bool(owner_id) and str(auth_user.get("id") or "") == owner_id
 
 
+_OVERLAY_TOKEN_COLUMNS = {
+    "game": "overlay_game_token",
+    "arena": "overlay_arena_token",
+    "ticker": "overlay_ticker_token",
+}
+
+
 def _get_or_create_overlay_tokens(session_id: str) -> dict | None:
-    """Return {game, arena} overlay tokens, generating them if missing."""
+    """Return {game, arena, ticker} overlay tokens, generating them if missing."""
     try:
         with get_conn() as conn:
+            cols = ", ".join(_OVERLAY_TOKEN_COLUMNS.values())
             row = conn.execute(
-                "SELECT overlay_game_token, overlay_arena_token FROM campaigns WHERE id=?",
+                f"SELECT {cols} FROM campaigns WHERE id=?",
                 (session_id,),
             ).fetchone()
             if not row:
                 return None
-            game_token = (row["overlay_game_token"] or "").strip()
-            arena_token = (row["overlay_arena_token"] or "").strip()
+            tokens = {}
             changed = False
-            if not game_token:
-                game_token = secrets.token_urlsafe(32)
-                changed = True
-            if not arena_token:
-                arena_token = secrets.token_urlsafe(32)
-                changed = True
+            for token_type, col in _OVERLAY_TOKEN_COLUMNS.items():
+                token = (row[col] or "").strip()
+                if not token:
+                    token = secrets.token_urlsafe(32)
+                    changed = True
+                tokens[token_type] = token
             if changed:
+                assignments = ", ".join(f"{col}=?" for col in _OVERLAY_TOKEN_COLUMNS.values())
                 conn.execute(
-                    "UPDATE campaigns SET overlay_game_token=?, overlay_arena_token=? WHERE id=?",
-                    (game_token, arena_token, session_id),
+                    f"UPDATE campaigns SET {assignments} WHERE id=?",
+                    (*tokens.values(), session_id),
                 )
                 conn.commit()
-            return {"game": game_token, "arena": arena_token}
+            return tokens
     except Exception as exc:
         logger.error("[overlay] _get_or_create_overlay_tokens error: %s", exc)
         return None
@@ -120,7 +129,7 @@ def _validate_overlay_key(session_id: str, key: str, token_type: str) -> bool:
         return False
     try:
         with get_conn() as conn:
-            col = "overlay_game_token" if token_type == "game" else "overlay_arena_token"
+            col = _OVERLAY_TOKEN_COLUMNS.get(token_type, "overlay_game_token")
             row = conn.execute(
                 f"SELECT {col} FROM campaigns WHERE id=?", (session_id,)
             ).fetchone()
@@ -199,6 +208,32 @@ async def overlay_arena_page(request: Request, session: str = "", key: str = "")
     )
 
 
+@router.get("/overlay/ticker", response_class=HTMLResponse)
+async def overlay_ticker_page(request: Request, session: str = "", key: str = ""):
+    """Serve the standalone event-ticker overlay page after validating the key."""
+    if not session or not key:
+        return HTMLResponse("<html><body>Missing session or key.</body></html>", status_code=400)
+    if not _validate_overlay_key(session, key, "ticker"):
+        return HTMLResponse("<html><body>Invalid overlay key.</body></html>", status_code=403)
+
+    if _jwt is None:
+        return HTMLResponse("<html><body>JWT library not available.</body></html>", status_code=500)
+
+    overlay_jwt = _make_overlay_jwt("overlay_ticker", session)
+    base_url = _public_base_url(request)
+    ws_url = base_url.replace("https://", "wss://").replace("http://", "ws://")
+
+    return _TEMPLATES.TemplateResponse(
+        "overlay_ticker.html",
+        {
+            "request": request,
+            "session_id": session,
+            "overlay_jwt": overlay_jwt,
+            "ws_url": ws_url,
+        },
+    )
+
+
 # ---------------------------------------------------------------------------
 # DM management API
 # ---------------------------------------------------------------------------
@@ -214,26 +249,28 @@ async def overlay_get_urls(session_id: str, request: Request):
         return JSONResponse(status_code=404, content={"error": "Session not found."})
 
     base = _public_base_url(request)
-    game_url  = f"{base}/overlay/game?session={session_id}&key={tokens['game']}"
-    arena_url = f"{base}/overlay/arena?session={session_id}&key={tokens['arena']}"
+    game_url   = f"{base}/overlay/game?session={session_id}&key={tokens['game']}"
+    arena_url  = f"{base}/overlay/arena?session={session_id}&key={tokens['arena']}"
+    ticker_url = f"{base}/overlay/ticker?session={session_id}&key={tokens['ticker']}"
 
     return JSONResponse(content={
-        "game_url":  game_url,
-        "arena_url": arena_url,
+        "game_url":   game_url,
+        "arena_url":  arena_url,
+        "ticker_url": ticker_url,
     })
 
 
 @router.post("/api/overlay/regenerate/{session_id}")
 async def overlay_regenerate(session_id: str, request: Request, type: str = "game"):
-    """Regenerate an overlay token (DM only).  type = 'game' | 'arena'."""
+    """Regenerate an overlay token (DM only).  type = 'game' | 'arena' | 'ticker'."""
     if not _resolve_dm(request, session_id):
         return JSONResponse(status_code=403, content={"error": "Forbidden."})
 
-    if type not in ("game", "arena"):
-        return JSONResponse(status_code=400, content={"error": "type must be 'game' or 'arena'."})
+    if type not in _OVERLAY_TOKEN_COLUMNS:
+        return JSONResponse(status_code=400, content={"error": "type must be 'game', 'arena', or 'ticker'."})
 
     new_token = secrets.token_urlsafe(32)
-    col = "overlay_game_token" if type == "game" else "overlay_arena_token"
+    col = _OVERLAY_TOKEN_COLUMNS[type]
     try:
         with get_conn() as conn:
             updated = conn.execute(

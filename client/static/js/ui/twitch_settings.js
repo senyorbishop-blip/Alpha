@@ -350,7 +350,10 @@
         var wrap = overlayWrap;
         if (!wrap || !d) return;
         wrap.innerHTML = _buildOverlayRow('Game Overlay', d.game_url, sessionId, 'game', '1920 × 1080 (full canvas, transparent)') +
-                         _buildOverlayRow('Arena Panel',  d.arena_url, sessionId, 'arena', '520 × 300 (compact corner panel)');
+                         _buildOverlayRow('Arena Panel',  d.arena_url, sessionId, 'arena', '520 × 300 (compact corner panel)') +
+                         (d.ticker_url
+                           ? _buildOverlayRow('Event Ticker', d.ticker_url, sessionId, 'ticker', '520 × 300 (rolling play-by-play feed; also built into the Game Overlay)')
+                           : '');
 
         wrap.querySelectorAll('.ov-copy-btn').forEach(function (btn) {
           btn.addEventListener('click', function () {

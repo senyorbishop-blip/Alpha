@@ -59,6 +59,15 @@ const responses  = loadJson('config/responses.json')   ?? {};
 const questConfig = loadJson('config/quests.json')     ?? {};
 // Optional arena shop override (array of catalog entries).
 const shopConfig  = loadJson('config/shop.json');
+// Stream/overlay narration config. Default is SLIM chat: play-by-play (duel
+// rounds, etc.) goes to the overlay event ticker and chat gets one line per
+// completed event, rewards included. Streamers who want the classic
+// round-by-round chat narration back set full_chat_narration=true here (or
+// CHAT_FULL_NARRATION=true in the environment).
+const streamConfig = loadJson('config/stream.json') ?? {};
+const FULL_CHAT_NARRATION =
+  /^(1|true|yes)$/i.test(process.env.CHAT_FULL_NARRATION ?? '') ||
+  !!streamConfig.full_chat_narration;
 
 // ---------------------------------------------------------------------------
 // Env validation
@@ -168,6 +177,24 @@ const rateLimiter = new RateLimiter({
 const lootRoller = new LootRoller(lootTables);
 
 // ---------------------------------------------------------------------------
+// Overlay event ticker
+//
+// Rule of thumb (also encoded in arena.js / quests.js / commandParser.js):
+//   Continuous or multi-step events → ticker. Results and personal replies →
+//   chat. One chat line per completed event, rewards included.
+//
+// The server stamps every relayed event with a seq number so overlays can
+// detect gaps instead of silently missing events.
+// ---------------------------------------------------------------------------
+function emitTicker(category, text, icon = '') {
+  gameClient.send('ticker_event', {
+    category: String(category || 'event'),
+    text: String(text || ''),
+    icon: String(icon || ''),
+  }).catch(err => logger.error('[ticker] emit error:', err));
+}
+
+// ---------------------------------------------------------------------------
 // Server-managed reward tables (DM-configurable in the Stream panel)
 //
 // The server persists a per-campaign rewards config mapping Twitch events to
@@ -213,7 +240,10 @@ async function grantPowerReward(username, displayName, entry, trigger, announcem
     trigger,
   });
   if (announcement && channel && twitchClient) {
-    twitchClient.say(channel, announcement(displayName, itemName));
+    // One chat line per reward roll; the ticker mirrors it for the overlay.
+    const line = announcement(displayName, itemName);
+    twitchClient.say(channel, line);
+    emitTicker('reward', line.replace(/@/g, ''));
   }
 }
 
@@ -250,7 +280,10 @@ async function grantLoot(username, displayName, tableName, trigger, announcement
   });
 
   if (announcement && channel && twitchClient) {
-    twitchClient.say(channel, announcement(displayName, safe));
+    // One chat line per reward roll; the ticker mirrors it for the overlay.
+    const line = announcement(displayName, safe);
+    twitchClient.say(channel, line);
+    emitTicker('reward', line.replace(/@/g, ''));
   }
 }
 
@@ -329,6 +362,7 @@ async function main() {
     logger,
     shopCatalog: Array.isArray(shopConfig) ? shopConfig : shopConfig?.catalog,
     legacyConfig: questConfig?.legacy,
+    onTickerEvent: emitTicker,
   });
 
   questManager = new QuestManager({
@@ -338,6 +372,7 @@ async function main() {
     config: questConfig,
     channel,
     logger,
+    onTickerEvent: emitTicker,
   });
   progression.attachQuests(questManager);
 
@@ -349,8 +384,12 @@ async function main() {
       interactiveMode: false,
       // Auto-drink a held Healing Potion on a death-blow (default off).
       autoPotion: !!questConfig?.auto_potion,
+      // Classic round-by-round chat narration (default off = ticker + one
+      // result line in chat). config/stream.json or CHAT_FULL_NARRATION.
+      fullChatNarration: FULL_CHAT_NARRATION,
     },
     logger,
+    onTickerEvent: emitTicker,
     // Map a chatter-typed opponent reference (login, display name, or !name
     // character name — with or without a leading @) to a login username.
     resolveOpponent: (name) => gameClient.send('chat_participant_resolve', { name }),
@@ -373,6 +412,7 @@ async function main() {
     rateLimiter,
     gameClient,
     twitchClient,
+    onTickerEvent: emitTicker,
     arenaHandler: (ch, username, displayName, action, args) => {
       arena.handleCommand(ch, username, displayName, action, args);
     },
@@ -501,7 +541,9 @@ async function main() {
         item_entry: buildItemEntry(result.item),
         trigger: `bits_${amount}`,
       });
-      twitchClient.say(channel, `${displayName} cheered ${amount} bits and received ${result.item}!`);
+      const bitsLine = `${displayName} cheered ${amount} bits and received ${result.item}!`;
+      twitchClient.say(channel, bitsLine);
+      emitTicker('reward', bitsLine.replace(/@/g, ''));
     });
 
     eventSubClient.on('raid', async ({ fromUsername, fromDisplayName, viewers }) => {

@@ -28,15 +28,18 @@ const arenas = [];
 function makeArena(opts = {}) {
   const twitch = makeTwitch();
   const collector = makeStatsCollector();
+  const ticker = [];
   const arena = new Arena({
     twitchClient: twitch,
     config: { duel_cooldown_seconds: 0, ...opts.config },
     logger: { info: () => {}, warn: () => {}, error: () => {} },
     onStatsUpdate: collector.fn,
+    onTickerEvent: (category, text) => ticker.push({ category, text }),
     resolveOpponent: opts.resolveOpponent,
+    progression: opts.progression,
   });
   arenas.push(arena);
-  return { arena, twitch, collector };
+  return { arena, twitch, collector, ticker };
 }
 
 /**
@@ -293,8 +296,8 @@ describe('Arena — no double-@ in reply templates', () => {
     for (const r of twitch.replied) expect(r.msg).not.toContain('@@');
   });
 
-  test('fight narration and winner announcement never contain @@', async () => {
-    const { arena, twitch } = makeArena();
+  test('fight narration and winner announcement never contain @@ (full narration)', async () => {
+    const { arena, twitch } = makeArena({ config: { fullChatNarration: true } });
     // Drive a full auto-resolve fight synchronously by stubbing the timers
     const scheduled = [];
     const origSetTimeout = global.setTimeout;
@@ -313,6 +316,68 @@ describe('Arena — no double-@ in reply templates', () => {
     expect(twitch.said.some(s => s.msg.includes('Round 1'))).toBe(true);
     // …and no message anywhere contains a double @
     for (const s of twitch.said) expect(s.msg).not.toContain('@@');
+  });
+});
+
+describe('Arena — slim narration (default) routes play-by-play to the ticker', () => {
+  /** Drive a full auto-resolve duel with stubbed timers; returns flushed state. */
+  async function runDuel(setup) {
+    const scheduled = [];
+    const origSetTimeout = global.setTimeout;
+    global.setTimeout = (fn, ms) => { scheduled.push(fn); return origSetTimeout(() => {}, 0); };
+    try {
+      await setup.arena.handleCommand(CH, 'alice', 'Alice', 'duel', ['@Bob']);
+      setup.arena.handleCommand(CH, 'bob', 'Bob', 'accept', []);
+      await new Promise(r => origSetTimeout(r, 20));  // flush async duel start
+      for (const fn of scheduled.splice(0)) fn();     // flush all round lines
+      await new Promise(r => origSetTimeout(r, 20));  // flush async result path
+    } finally {
+      global.setTimeout = origSetTimeout;
+    }
+  }
+
+  test('chat gets ONE result line; start and rounds go to the ticker only', async () => {
+    const setup = makeArena();
+    await runDuel(setup);
+
+    // Ticker carries the play-by-play (no '@' — mentions are chat-only)…
+    expect(setup.ticker.some(t => t.text.includes('ARENA DUEL'))).toBe(true);
+    expect(setup.ticker.some(t => t.text.includes('Round 1'))).toBe(true);
+    for (const t of setup.ticker) expect(t.text).not.toContain('@');
+    expect(setup.ticker.every(t => t.category === 'duel')).toBe(true);
+
+    // …while chat gets exactly one line for the fight itself: the result.
+    // (The challenge invite is a conversation, so it stays in chat too.)
+    expect(setup.twitch.said.some(s => s.msg.includes('ARENA DUEL'))).toBe(false);
+    expect(setup.twitch.said.some(s => s.msg.includes('Round 1'))).toBe(false);
+    const fightLines = setup.twitch.said.filter(s => !s.msg.includes('challenges you'));
+    expect(fightLines).toHaveLength(1);
+    expect(fightLines[0].msg).toMatch(/^(🏆|🤝)/);
+    expect(fightLines[0].msg).toMatch(/round/);
+  });
+
+  test('the single result line folds in the progression rewards', async () => {
+    const progression = {
+      duelEligibility: async () => ({ ok: true }),
+      combatStatsFor: async () => ({ maxHp: 20, ac: 12, atkBonus: 0, startHp: 20, potions: 0 }),
+      consumePotions: async () => {},
+      recordDuelResult: jest.fn(async () => ({
+        xpWin: 60, goldWin: 15, xpLoss: 20, goldLoss: 5, winnerReady: false,
+      })),
+    };
+    const setup = makeArena({ progression });
+    await runDuel(setup);
+
+    // Rewards are suppressed as a separate line and folded into the result.
+    expect(progression.recordDuelResult).toHaveBeenCalledWith(
+      expect.any(String), expect.any(String), CH, { announce: false });
+    const resultLine = setup.twitch.said.find(s => s.msg.startsWith('🏆'));
+    if (resultLine) {  // (a draw rolls no rewards line)
+      expect(resultLine.msg).toContain('+60 XP, +15 gold');
+      expect(resultLine.msg).toContain('+20 XP, +5 gold');
+    } else {
+      expect(setup.twitch.said.some(s => s.msg.startsWith('🤝'))).toBe(true);
+    }
   });
 });
 
