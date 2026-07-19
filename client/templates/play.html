@@ -4,6 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>D&D Tabletop — Play</title>
+  <!-- Inline favicon: stops the browser's /favicon.ico probe (the server has no
+       icon route, so that probe 404s and pollutes the console on every load). -->
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext x='0' y='13' font-size='13'%3E%E2%9A%94%3C/text%3E%3C/svg%3E">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600&family=Crimson+Pro:ital,wght@0,300;0,400;0,600;1,300&family=Share+Tech+Mono&display=swap" rel="stylesheet">
   <!-- 3-D Dice: import map for CDN ES-modules -->
@@ -1670,7 +1673,9 @@
     <button class="qb-btn" onclick="if(window.CombatQuickBar&&typeof window.CombatQuickBar.openManual==='function')window.CombatQuickBar.openManual();"><span class="g">⚔</span>Actions</button>
     <button class="qb-btn" onclick="typeof toggleFlyout==='function'&&toggleFlyout('flyout-dice')"><span class="g">⚄</span>Dice</button>
     <button class="qb-btn" onclick="typeof toggleSheet==='function'&&toggleSheet()"><span class="g">📖</span>Sheet</button>
+    <button class="qb-btn" id="rp-tool-notes" onclick="typeof toggleFlyout==='function'&&toggleFlyout('flyout-journal')" title="Notes & journal — your private notes, session recap, quests & handouts"><span class="g">🗒</span>Notes</button>
     <div class="qb-sep"></div>
+    <button class="qb-btn" id="rp-tool-recenter" onclick="typeof resetView==='function'&&resetView()" title="Reset the map view (pan & zoom back to center)"><span class="g">⌂</span>Recenter</button>
     <button class="qb-btn" id="rp-tool-sound" aria-pressed="false" onclick="typeof _rpToggleSound==='function'&&_rpToggleSound(this)" title="Personal volume — master, ambient & SFX"><span class="g">🔊</span>Sound</button>
   </div>
 
@@ -34357,7 +34362,7 @@ function renderPlayerCompanionPanel() {
   wrap.style.display = 'grid';
   wrap.innerHTML = `
     <div class="player-companion-section is-half">
-      <div class="player-companion-header"><span>🧠 Personal Notes</span><span style="font-size:0.56rem;color:var(--parchment-dim);">private to you</span></div>
+      <div class="player-companion-header"><span>🧠 Personal Notes</span><span style="display:flex;align-items:center;gap:0.35rem;"><span style="font-size:0.56rem;color:var(--parchment-dim);">private to you</span><button class="mini-btn" type="button" onclick="window.openCharacterStickyNotes && window.openCharacterStickyNotes()" style="padding:0.16rem 0.38rem;font-size:0.6rem;">Sticky</button></span></div>
       <textarea id="player-companion-personal" class="player-companion-input" maxlength="8000" placeholder="Your theories, clues, names to remember, plans…">${escapeHtml(_playerCompanionDraft.personal || '')}</textarea>
     </div>
     <div class="player-companion-section is-half">
@@ -36577,6 +36582,7 @@ function toggleFlyout(id) {
       }
     }
     if (id === 'flyout-perm') refreshPingPermissionUi();
+    if (id === 'flyout-journal' && typeof renderJournalPanel === 'function') renderJournalPanel();
   }
 }
 
