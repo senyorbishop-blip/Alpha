@@ -454,6 +454,25 @@
     <input type="hidden" id="char-passive" value="10" />
     <input type="hidden" id="char-faction" value="" />
     <button class="place-char-btn" onclick="placeCharacter()">🛡 Place My Character</button>
+    <div id="player-companion-creator" style="margin-top:0.8rem;padding-top:0.75rem;border-top:1px solid rgba(212,175,55,0.24);">
+      <div class="sidebar-label" style="margin-bottom:0.3rem;">Companion / Creation</div>
+      <div style="font-size:0.62rem;line-height:1.4;color:var(--parchment-dim);margin-bottom:0.5rem;">Place a creature you control, such as a companion, imp, animal, familiar, or turret. You can right-click it later to update its stats.</div>
+      <input type="text" class="mini-input" id="companion-token-name" maxlength="40" placeholder="Name (e.g. Ember the Imp)" style="width:100%;margin-bottom:0.35rem;" />
+      <select class="mini-input" id="companion-token-kind" style="width:100%;margin-bottom:0.35rem;">
+        <option value="Companion">Companion</option><option value="Familiar">Familiar / Imp</option><option value="Animal">Animal</option><option value="Turret">Turret / Construct</option><option value="Other">Other creation</option>
+      </select>
+      <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0.35rem;margin-bottom:0.35rem;">
+        <input type="number" class="mini-input" id="companion-token-hp" min="1" max="9999" value="10" aria-label="Companion hit points" placeholder="HP" />
+        <input type="number" class="mini-input" id="companion-token-ac" min="1" max="99" value="10" aria-label="Companion armor class" placeholder="AC" />
+        <input type="number" class="mini-input" id="companion-token-speed" min="0" max="300" value="30" aria-label="Companion speed" placeholder="Speed" />
+        <input type="number" class="mini-input" id="companion-token-init" min="-20" max="30" value="0" aria-label="Companion initiative bonus" placeholder="Initiative" />
+        <input type="number" class="mini-input" id="companion-token-passive" min="0" max="99" value="10" aria-label="Companion passive perception" placeholder="Passive perception" />
+        <select class="mini-input" id="companion-token-size" aria-label="Companion token size"><option value="1">1×1 Small / Medium</option><option value="2">2×2 Large</option><option value="3">3×3 Huge</option><option value="4">4×4 Gargantuan</option></select>
+      </div>
+      <input type="url" class="mini-input" id="companion-token-image-url" maxlength="300" placeholder="Portrait URL (optional)" style="width:100%;margin-bottom:0.35rem;" />
+      <textarea class="mini-input" id="companion-token-notes" maxlength="2000" placeholder="Abilities, attacks, saves, or other notes…" style="width:100%;min-height:64px;resize:vertical;margin-bottom:0.4rem;padding:0.45rem;"></textarea>
+      <button class="place-char-btn" type="button" onclick="placePlayerCompanionToken()">🐾 Place Companion Token</button>
+    </div>
   </div>
 </div>
 
@@ -21339,6 +21358,58 @@ function createToken() {
   const imageUrlEl = document.getElementById('new-token-image-url');
   if (imageUrlEl) imageUrlEl.value = '';
   refreshTokenImageFieldLabels();
+}
+
+function placePlayerCompanionToken() {
+  if (ROLE !== 'player') {
+    showToast('Only a player can use this companion creator.');
+    return;
+  }
+  const readInt = (id, fallback, min, max) => {
+    const parsed = parseInt(document.getElementById(id)?.value, 10);
+    return Math.max(min, Math.min(max, Number.isNaN(parsed) ? fallback : parsed));
+  };
+  const nameEl = document.getElementById('companion-token-name');
+  const name = String(nameEl?.value || '').trim();
+  if (!name) {
+    showToast('Give your companion or creation a name first.');
+    nameEl?.focus();
+    return;
+  }
+  const kind = String(document.getElementById('companion-token-kind')?.value || 'Companion');
+  const hp = readInt('companion-token-hp', 10, 1, 9999);
+  const sizePreset = getTokenSizePresetByKey(document.getElementById('companion-token-size')?.value || '1');
+  const center = screenToWorld(canvas.width / 2, canvas.height / 2);
+  const payload = {
+    name,
+    tokenType: 'companion',
+    owner_id: String(USER_ID || ''),
+    faction: 'allies',
+    color: selectedColor || '#7ad67a',
+    shape: 'circle',
+    x: center.x - sizePreset.width / 2,
+    y: center.y - sizePreset.height / 2,
+    width: sizePreset.width,
+    height: sizePreset.height,
+    hp,
+    maxHp: hp,
+    ac: readInt('companion-token-ac', 10, 1, 99),
+    speed: readInt('companion-token-speed', 30, 0, 300),
+    initiativeMod: readInt('companion-token-init', 0, -20, 30),
+    passivePerception: readInt('companion-token-passive', 10, 0, 99),
+    notes: `${kind}${String(document.getElementById('companion-token-notes')?.value || '').trim() ? ' • ' + String(document.getElementById('companion-token-notes').value).trim() : ''}`,
+    image_url: String(document.getElementById('companion-token-image-url')?.value || '').trim() || null,
+    map_context: _getCurrentMapContext(),
+    client_nonce: 'companion_' + Math.random().toString(36).slice(2, 10),
+  };
+  const snapped = snapTokenToGrid(payload.x, payload.y, payload);
+  payload.x = snapped.x;
+  payload.y = snapped.y;
+  sendWS({ type: 'token_create', payload });
+  if (nameEl) nameEl.value = '';
+  const notesEl = document.getElementById('companion-token-notes');
+  if (notesEl) notesEl.value = '';
+  showToast(`${name} placed as your ${kind.toLowerCase()}.`);
 }
 
 function placeBeastMasterCompanionToken(companionData = {}) {

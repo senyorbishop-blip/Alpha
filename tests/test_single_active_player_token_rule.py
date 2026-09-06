@@ -70,6 +70,94 @@ async def test_player_claims_first_token_successfully(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_player_can_create_companion_alongside_primary_with_stats(monkeypatch):
+    session = Session(id="s-player-companion-create")
+    player = User(id="p1", name="Player One", role="player")
+    session.users[player.id] = player
+    session.tokens["hero"] = Token(
+        id="hero", name="Hero", x=0, y=0, width=40, height=40,
+        color="#fff", shape="circle", owner_id=player.id, token_type="player",
+    )
+
+    async def _noop(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(token_handlers, "_broadcast_token_event", _noop)
+    monkeypatch.setattr(token_handlers, "_broadcast_token_state_sync", _noop)
+    monkeypatch.setattr(token_handlers, "save_campaign_async", _noop)
+
+    await token_handlers.handle_token_create({
+        "name": "Sprocket", "owner_id": player.id, "tokenType": "companion",
+        "x": 40, "y": 40, "width": 40, "height": 40, "hp": 18,
+        "maxHp": 18, "ac": 15, "speed": 30, "initiativeMod": 2,
+        "passivePerception": 12, "notes": "Turret • force bolt",
+    }, session, player)
+
+    companion = next(t for t in session.tokens.values() if t.name == "Sprocket")
+    assert companion.owner_id == player.id
+    assert companion.token_type == "companion"
+    assert (companion.hp, companion.max_hp, companion.ac, companion.speed) == (18, 18, 15, 30)
+    assert companion.initiative_mod == 2
+    assert companion.passive_perception == 12
+
+
+@pytest.mark.anyio
+async def test_player_cannot_disguise_owned_monster_as_companion_creation(monkeypatch):
+    session = Session(id="s-player-monster-create-denied")
+    player = User(id="p1", name="Player One", role="player")
+    session.users[player.id] = player
+    sent = []
+
+    async def _send_to(*args, **kwargs):
+        sent.append(args)
+
+    monkeypatch.setattr(token_handlers.manager, "send_to", _send_to)
+    await token_handlers.handle_token_create({
+        "name": "Not My Dragon", "owner_id": player.id, "tokenType": "monster",
+    }, session, player)
+
+    assert session.tokens == {}
+    assert any("character or a companion" in args[2]["payload"]["message"] for args in sent)
+
+
+def test_play_page_surfaces_player_companion_stat_creator():
+    source = Path("client/templates/play.html").read_text(encoding="utf-8")
+    for marker in (
+        'id="player-companion-creator"', 'id="companion-token-hp"',
+        'id="companion-token-ac"', 'id="companion-token-speed"',
+        "function placePlayerCompanionToken()", "tokenType: 'companion'",
+    ):
+        assert marker in source
+
+
+@pytest.mark.anyio
+async def test_player_can_update_owned_companion_core_stats(monkeypatch):
+    session = Session(id="s-player-companion-edit")
+    player = User(id="p1", name="Player One", role="player")
+    session.users[player.id] = player
+    session.tokens["companion"] = Token(
+        id="companion", name="Old Name", x=0, y=0, width=40, height=40,
+        color="#fff", shape="circle", owner_id=player.id, token_type="companion",
+        hp=8, max_hp=10,
+    )
+
+    async def _noop(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(token_handlers, "_broadcast_token_visibility", _noop)
+    monkeypatch.setattr(token_handlers, "_broadcast_token_state_sync", _noop)
+    monkeypatch.setattr(token_handlers, "save_campaign_async", _noop)
+    await token_handlers.handle_token_edit({
+        "token_id": "companion", "name": "New Name", "hp": 14, "maxHp": 16,
+        "ac": 17, "speed": 40, "notes": "Updated companion stats",
+    }, session, player)
+
+    companion = session.tokens["companion"]
+    assert (companion.name, companion.hp, companion.max_hp) == ("New Name", 14, 16)
+    assert (companion.ac, companion.speed, companion.notes) == (17, 40, "Updated companion stats")
+
+
+@pytest.mark.anyio
 async def test_player_blocked_from_creating_second_active_owned_token(monkeypatch):
     session = Session(id="s-token-create-blocked")
     player = User(id="p1", name="Player One", role="player")
