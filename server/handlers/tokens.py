@@ -344,7 +344,7 @@ def _assistant_can_control_token(session: Session, user: User, token) -> bool:
         return False
     return assistant_dm_has_scope(session, user, "tokens.control_npc", token_id=str(getattr(token, "id", "") or ""))
 
-def _player_active_owned_tokens(session: Session, owner_id: str, *, exclude_token_id: str | None = None) -> list:
+def _player_active_owned_tokens(session: Session, owner_id: str, *, exclude_token_id: str | None = None, include_companions: bool = False) -> list:
     owner = str(owner_id or "").strip()
     exclude = str(exclude_token_id or "").strip()
     if not owner:
@@ -355,6 +355,9 @@ def _player_active_owned_tokens(session: Session, owner_id: str, *, exclude_toke
         if tok_owner != owner:
             continue
         if bool(getattr(tok, "staged", False)):
+            continue
+        token_kind = str(getattr(tok, "token_type", "player") or "player").strip().lower()
+        if not include_companions and token_kind == "companion":
             continue
         tok_id = str(getattr(tok, "id", "") or "")
         if exclude and tok_id == exclude:
@@ -559,6 +562,7 @@ async def handle_token_create(payload: dict, session: Session, user: User):
         owner_user = session.users.get(owner_id)
         if not owner_user or owner_user.role != "player":
             owner_id = None
+    requested_token_type = str(payload.get("tokenType", payload.get("token_type", "player")) or "player").strip().lower()
     if user.role == "player":
         if owner_id != user.id:
             await manager.send_to(session.id, user.id, {
@@ -566,19 +570,36 @@ async def handle_token_create(payload: dict, session: Session, user: User):
                 "payload": {"message": "Players can only create tokens they own."}
             })
             return
+        if requested_token_type not in {"player", "companion"}:
+            await manager.send_to(session.id, user.id, {
+                "type": "error",
+                "payload": {"message": "Players can only create their character or a companion token."}
+            })
+            return
         active_owned_tokens = _player_active_owned_tokens(session, user.id)
-        if active_owned_tokens:
+        if requested_token_type == "player" and active_owned_tokens:
             if await _move_player_owned_token_from_other_map(payload, session, user, active_owned_tokens):
                 return
             await _deny_player_single_token_limit(session, user, token_name="token")
             return
+        if requested_token_type == "companion":
+            active_companions = [
+                tok for tok in _player_active_owned_tokens(session, user.id, include_companions=True)
+                if str(getattr(tok, "token_type", "") or "").strip().lower() == "companion"
+            ]
+            if len(active_companions) >= 8:
+                await manager.send_to(session.id, user.id, {
+                    "type": "error",
+                    "payload": {"message": "You can have up to eight active companion tokens."}
+                })
+                return
     elif user.role == "viewer":
         await manager.send_to(session.id, user.id, {
             "type": "error",
             "payload": {"message": "Viewers cannot create tokens."}
         })
         return
-    if owner_id and not bool(payload.get("staged", False)):
+    if owner_id and requested_token_type != "companion" and not bool(payload.get("staged", False)):
         if _player_active_owned_tokens(session, owner_id):
             await manager.send_to(session.id, user.id, {
                 "type": "error",
@@ -586,7 +607,7 @@ async def handle_token_create(payload: dict, session: Session, user: User):
             })
             return
 
-    token_type = str(payload.get("tokenType", payload.get("token_type", "player")) or "player")
+    token_type = requested_token_type
     vision_cfg = _sanitize_token_vision_payload(payload, owner_id=owner_id, token_type=token_type, existing=None)
 
     token = create_token(
@@ -766,6 +787,7 @@ async def handle_token_edit(payload: dict, session: Session, user: User):
     is_dm = user.role == "dm"
     assistant_can_control = _assistant_can_control_token(session, user, token)
     is_owner = _owner_matches_user(getattr(token, "owner_id", ""), user)
+    is_owned_companion = bool(is_owner and str(getattr(token, "token_type", "") or "").strip().lower() == "companion")
     if not is_dm and not is_owner and not assistant_can_control:
         return
 
@@ -808,6 +830,20 @@ async def handle_token_edit(payload: dict, session: Session, user: User):
             token.hidden = bool(payload["hidden"])
         if "tokenType" in payload or "token_type" in payload:
             token.token_type = str(payload.get("tokenType", payload.get("token_type", token.token_type)) or "player")
+
+    if is_owned_companion and not is_dm:
+        if payload.get("name"):
+            token.name = str(payload.get("name"))[:80]
+        if payload.get("color"):
+            token.color = str(payload.get("color"))[:32]
+        if payload.get("maxHp") is not None:
+            token.max_hp = max(1, _safe_int(payload.get("maxHp"), getattr(token, "max_hp", 1), minimum=1))
+        if payload.get("hp") is not None:
+            token.hp = min(token.max_hp, _safe_int(payload.get("hp"), getattr(token, "hp", 0), minimum=0))
+        if payload.get("width") is not None:
+            token.width = max(10.0, min(400.0, float(payload.get("width"))))
+        if payload.get("height") is not None:
+            token.height = max(10.0, min(400.0, float(payload.get("height"))))
 
     if "tempHp" in payload:
         token.temp_hp = max(0, int(payload.get("tempHp", 0) or 0))
