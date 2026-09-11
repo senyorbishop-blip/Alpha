@@ -8,6 +8,9 @@ class _FakeManager:
     def __init__(self):
         self.sent = []
 
+    def get_session_connections(self, _session_id):
+        return {"p1": object(), "dm1": object()}
+
     async def send_to(self, session_id, user_id, message):
         self.sent.append((session_id, user_id, message))
 
@@ -191,8 +194,8 @@ def test_ac_light_armor_and_no_armor_fallback(monkeypatch):
     _equip(session, player, 0)
     armored = inventory_handlers._calculate_ac_for_user(session, player, get_player_inventory_for_user(session, player.id))
 
-    assert base == 12  # 10 + dex mod (+2)
-    assert armored == 13  # 11 + dex mod (+2)
+    assert base == 12
+    assert armored == 13
 
 
 def test_ac_medium_and_heavy(monkeypatch):
