@@ -1,5 +1,6 @@
 from fastapi import APIRouter, File, UploadFile
 
+from server.character.ddb_link_routes import router as ddb_link_router
 from server.integrations.service import (
     fetch_ddb_character_response,
     integrations_status_response,
@@ -7,6 +8,10 @@ from server.integrations.service import (
 )
 
 router = APIRouter()
+# Registered here (before server.character.routes in main.py) so the existing
+# /api/character/import/ddb-id/commit UI path is upgraded to persistent linking
+# without removing or duplicating the established preview/normalizer flow.
+router.include_router(ddb_link_router)
 
 
 @router.get("/api/ddb/character/{char_id}")
