@@ -62,15 +62,11 @@ async def test_token_moved_broadcast_carries_increasing_revision(monkeypatch):
     second_rev = captured[1]["visibility_revision"]
     assert isinstance(first_rev, int) and first_rev > 0
     assert second_rev > first_rev
-    # The session-wide counter that tokens_sync also stamps must reflect the
-    # same advancement, so the two streams stay comparable.
     assert session.visibility_revision >= second_rev
 
 
 @pytest.mark.anyio
 async def test_token_moved_omits_revision_only_if_counter_never_bumped(monkeypatch):
-    # Sanity check: a brand-new session starts the counter at 0, so the very
-    # first move must still produce a positive (post-increment) revision.
     session, _dm, player, token = _build_session()
     assert session.visibility_revision == 0
 
@@ -121,6 +117,7 @@ def _run_token_moved_case(payloads):
     token positions after each payload is processed.
     """
     code = f"""
+const ROLE = 'player';
 {_stale_guard_snippet()}
 
 const tokens = {{ 'tok-1': {{ id: 'tok-1', x: 0, y: 0 }} }};
@@ -146,20 +143,16 @@ console.log(JSON.stringify(results));
 def test_stale_token_moved_payload_is_dropped_by_client():
     payloads = [
         {"token_id": "tok-1", "x": 10, "y": 10, "visibility_revision": 5},
-        {"token_id": "tok-1", "x": 99, "y": 99, "visibility_revision": 3},  # stale, out of order
+        {"token_id": "tok-1", "x": 99, "y": 99, "visibility_revision": 3},
         {"token_id": "tok-1", "x": 20, "y": 20, "visibility_revision": 6},
     ]
     results = _run_token_moved_case(payloads)
     assert results[0] == {"x": 10, "y": 10}
-    # The out-of-order/stale move must be ignored, not applied.
     assert results[1] == {"x": 10, "y": 10}
     assert results[2] == {"x": 20, "y": 20}
 
 
 def test_token_moved_payload_without_revision_still_applies():
-    # Backward compatibility: a payload missing visibility_revision (e.g. from
-    # a code path that hasn't been updated yet) must still apply, not be
-    # treated as stale.
     payloads = [{"token_id": "tok-1", "x": 42, "y": 42}]
     results = _run_token_moved_case(payloads)
     assert results[0] == {"x": 42, "y": 42}
