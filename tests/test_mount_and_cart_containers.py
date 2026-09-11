@@ -42,6 +42,8 @@ def test_bag_add_item_accepts_mundane_container(monkeypatch):
     from server.session import Session, User, get_player_inventory_for_user
 
     class FakeManager:
+        def get_session_connections(self, _sid):
+            return {"p1": object()}
         async def send_to(self, session_id, user_id, message):
             return None
 

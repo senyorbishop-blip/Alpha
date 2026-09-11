@@ -11,6 +11,9 @@ class CaptureManager:
         self.sent = []
         self.broadcasts = []
 
+    def get_session_connections(self, _session_id):
+        return {"dm": object(), "p1": object(), "p2": object(), "v1": object()}
+
     async def send_to(self, session_id, user_id, message):
         self.sent.append((session_id, user_id, message))
 
@@ -204,8 +207,13 @@ def test_reconnect_snapshot_after_long_rest_has_restored_slots_and_item_charges(
 
     asyncio.run(camp_rest.handle_character_self_rest({"rest_type": "long", "token_id": "alice-1"}, session, player))
 
+    # Reconnect snapshots intentionally carry profile stubs. Verify that the
+    # stub survives the snapshot while the authoritative full profile keeps
+    # the restored spell-slot state for the on-demand profile fetch path.
     snapshot = session.to_state_dict()
-    profile = next(row for row in snapshot["char_profiles"][owner_key] if row["id"] == profile_id)
+    stub = next(row for row in snapshot["char_profiles"][owner_key] if row["id"] == profile_id)
+    assert stub["id"] == profile_id
+    profile = next(row for row in session.char_profiles[owner_key] if row["id"] == profile_id)
     assert profile["nativeCharacter"]["spellState"]["slots"]["1"] == 4
     assert session.player_inventories[f"{owner_key}::profile::{profile_id}"][0]["charges_current"] == 3
     assert build_quick_actions_sync_payload(session, player.id)["charges"][0]["charges_current"] == 3
@@ -254,9 +262,6 @@ def test_short_rest_absolute_hp_contract_is_idempotent_after_prior_token_vitals(
     capture = _patch(monkeypatch)
     session, player, *_ = _session()
     owner_key, _profile_id = _attach_active_profile(session, player)
-    # Simulate the live client's optimistic token vitals edit arriving before
-    # the final character_rest packet.  The rest packet carries absolute HP, so
-    # the server must not add healed_amount a second time.
     session.tokens["alice-1"].hp = 7
 
     asyncio.run(camp_rest.handle_character_self_rest({

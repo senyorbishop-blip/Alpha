@@ -10,6 +10,9 @@ class _CaptureManager:
     def __init__(self):
         self.sent = []
 
+    def get_session_connections(self, _session_id):
+        return {"dm1": object(), "pl1": object()}
+
     async def send_to(self, session_id, user_id, message):
         self.sent.append((session_id, user_id, message))
 
@@ -85,7 +88,6 @@ def test_broadcast_token_visibility_includes_revisions_and_hides_from_players(mo
     assert player_payload.get('token_id') == token.id
     assert player_payload.get('token_state_revision') == 1
     assert player_payload.get('visibility_revision') == 1
-    # Hidden token details must never leak in the removal notice.
     assert 'name' not in player_payload
     assert 'x' not in player_payload
     assert 'hp' not in player_payload
@@ -127,7 +129,6 @@ def test_stamp_token_revision_and_bump_token_state_revision_are_independent_of_v
     rev = common_handlers._stamp_token_revision(session, token)
     assert rev == 1
     assert token.revision == 1
-    # _stamp_token_revision/bump_token_state_revision must not touch visibility_revision.
     assert session.visibility_revision == 0
 
     vis_rev = common_handlers.bump_visibility_revision(session)
@@ -155,6 +156,9 @@ def test_local_map_nav_includes_revision_fields_and_resyncs_tokens(monkeypatch):
     async def _send_to(*args, **kwargs):
         sent.append((args, kwargs))
 
+    def _connections(_session_id):
+        return {dm.id: object(), player.id: object()}
+
     async def _save_campaign_async(_session):
         return True
 
@@ -165,8 +169,9 @@ def test_local_map_nav_includes_revision_fields_and_resyncs_tokens(monkeypatch):
         token_sync_calls.append(sess)
         return await orig_token_sync(sess)
 
-    monkeypatch.setattr(map_editor, "manager", SimpleNamespace(broadcast=_broadcast, send_to=_send_to))
-    monkeypatch.setattr(common_handlers, "manager", SimpleNamespace(broadcast=_broadcast, send_to=_send_to))
+    manager = SimpleNamespace(broadcast=_broadcast, send_to=_send_to, get_session_connections=_connections)
+    monkeypatch.setattr(map_editor, "manager", manager)
+    monkeypatch.setattr(common_handlers, "manager", manager)
     monkeypatch.setattr(map_editor, "save_campaign_async", _save_campaign_async)
     monkeypatch.setattr(map_editor, "_broadcast_token_state_sync", _spy_token_sync)
 

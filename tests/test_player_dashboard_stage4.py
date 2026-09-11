@@ -42,11 +42,11 @@ def test_stage4_player_dashboard_tabs_summary_modes_and_empty_states():
     assert "updateCharacterBookModeRibbon" in book
 
 
-def test_stage4_inventory_keeps_equipped_backpack_currency_attunement_sections():
+def test_stage4_inventory_keeps_equipment_currency_attunement_and_container_sections():
     inventory = read("client/static/js/character/tabs/inventory_tab.js")
 
-    for section in ["Equipped", "Backpack", "Currency", "Attunement"]:
+    for section in ["Equipped", "Currency", "Attunement", "Containers", "Consumables", "Carried Items", "All Items"]:
         assert section in inventory
 
-    assert "_renderBackpack" in inventory
+    assert "_renderContainers" in inventory
     assert "_renderAttunement" in inventory

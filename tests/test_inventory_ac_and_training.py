@@ -217,6 +217,7 @@ async def test_equip_armor_broadcasts_updated_token_ac(monkeypatch):
             tokens_synced.append(msg)
 
     monkeypatch.setattr(inventory_handlers.manager, "send_to", _send_to)
+    monkeypatch.setattr(inventory_handlers.manager, "get_session_connections", lambda _sid: {user.id: object()})
     await inventory_handlers.handle_inventory_equip_item({"item_index": 0}, session, user)
 
     # token.ac in server memory must now equal 16
@@ -250,6 +251,7 @@ async def test_dex_profile_update_refreshes_token_ac(monkeypatch):
             tokens_synced.append(msg)
 
     monkeypatch.setattr(inventory_handlers.manager, "send_to", _send_to)
+    monkeypatch.setattr(inventory_handlers.manager, "get_session_connections", lambda _sid: {user.id: object()})
 
     # Simulate saving an updated profile with DEX 18 (+4 → 11+4=15)
     owner_key = normalize_profile_owner_key(user.name) or user.id

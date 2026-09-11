@@ -8,6 +8,9 @@ class _CaptureManager:
     def __init__(self):
         self.sent = []
 
+    def get_session_connections(self, _session_id):
+        return {"dm1": object(), "pl1": object()}
+
     async def send_to(self, session_id, user_id, message):
         self.sent.append((session_id, user_id, message))
 

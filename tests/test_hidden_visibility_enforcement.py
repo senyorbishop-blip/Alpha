@@ -47,10 +47,7 @@ from server.handlers.common import (
 from server.session import Session, Token, User, filter_editor_props_for_role
 
 
-# --- Shared helper assertions ----------------------------------------------
-
 def assert_no_hidden_token_payload(message: dict, hidden_token_id: str):
-    """The given token id must not appear anywhere in a payload's token maps."""
     payload = message.get("payload") if isinstance(message, dict) else message
     assert payload is not None
     tokens = payload.get("tokens") if isinstance(payload, dict) else None
@@ -72,8 +69,6 @@ def assert_dm_payload_contains_hidden_when_allowed(message: dict, hidden_token_i
     assert hidden_token_id in tokens
 
 
-# --- Fixtures ----------------------------------------------------------------
-
 def _fog_entry(*, enabled=True, cols=4, rows=4, revealed_cells=()):
     total = cols * rows
     cells = ["0"] * total
@@ -83,9 +78,6 @@ def _fog_entry(*, enabled=True, cols=4, rows=4, revealed_cells=()):
 
 
 def _build_full_session():
-    """A session with every flavor of hideable token: visible PC, hidden NPC,
-    fog-hidden NPC, wall-LOS-hidden NPC, staged NPC, and a secret undiscovered
-    door blocking LOS to one of them."""
     session = Session(id="s-hide")
     dm = User(id="dm-1", name="DM", role="dm")
     player = User(id="player-1", name="Player", role="player")
@@ -98,39 +90,18 @@ def _build_full_session():
 
     session.fog_maps = {"world": _fog_entry(revealed_cells=range(16))}
 
-    pc = Token(
-        id="tok-pc", name="Hero", x=0, y=0, width=40, height=40,
-        color="#fff", shape="circle", owner_id=player.id, token_type="player",
-        vision_enabled=True, vision_radius=2000,
-    )
-    hidden_npc = Token(
-        id="tok-hidden-npc", name="Shadow Assassin", x=10, y=10, width=40, height=40,
-        color="#f00", shape="circle", owner_id=None, token_type="npc", hidden=True,
-    )
-    staged_npc = Token(
-        id="tok-staged-npc", name="Ambush Wolves", x=20, y=20, width=40, height=40,
-        color="#a00", shape="circle", owner_id=None, token_type="monster", staged=True,
-    )
-    staged_other_player_token = Token(
-        id="tok-staged-other-pc", name="Other Player Companion", x=5, y=5, width=40, height=40,
-        color="#00a", shape="circle", owner_id=other_player.id, token_type="player", staged=True,
-    )
-    visible_npc = Token(
-        id="tok-visible-npc", name="Goblin Scout", x=0, y=0, width=20, height=20,
-        color="#0f0", shape="circle", owner_id=None, token_type="npc",
-    )
+    pc = Token(id="tok-pc", name="Hero", x=0, y=0, width=40, height=40, color="#fff", shape="circle", owner_id=player.id, token_type="player", vision_enabled=True, vision_radius=2000)
+    hidden_npc = Token(id="tok-hidden-npc", name="Shadow Assassin", x=10, y=10, width=40, height=40, color="#f00", shape="circle", owner_id=None, token_type="npc", hidden=True)
+    staged_npc = Token(id="tok-staged-npc", name="Ambush Wolves", x=20, y=20, width=40, height=40, color="#a00", shape="circle", owner_id=None, token_type="monster", staged=True)
+    staged_other_player_token = Token(id="tok-staged-other-pc", name="Other Player Companion", x=5, y=5, width=40, height=40, color="#00a", shape="circle", owner_id=other_player.id, token_type="player", staged=True)
+    visible_npc = Token(id="tok-visible-npc", name="Goblin Scout", x=0, y=0, width=20, height=20, color="#0f0", shape="circle", owner_id=None, token_type="npc")
     session.tokens[pc.id] = pc
     session.tokens[hidden_npc.id] = hidden_npc
     session.tokens[staged_npc.id] = staged_npc
     session.tokens[staged_other_player_token.id] = staged_other_player_token
     session.tokens[visible_npc.id] = visible_npc
 
-    session.editor_props = {"world": [{
-        "id": "door-1", "kind": "door", "x": 9999, "y": 9999, "facing": "v",
-        "state": "closed", "locked": False, "blocks_vision": True,
-        "secret": True, "revealed": False,
-    }]}
-
+    session.editor_props = {"world": [{"id": "door-1", "kind": "door", "x": 9999, "y": 9999, "facing": "v", "state": "closed", "locked": False, "blocks_vision": True, "secret": True, "revealed": False}]}
     return session, dm, player, other_player, viewer
 
 
@@ -149,10 +120,7 @@ async def _capture(monkeypatch, target_module):
 
 
 def _stub_connections_for(monkeypatch, target_module, session):
-    monkeypatch.setattr(
-        target_module.manager, "get_session_connections",
-        lambda sid: {uid: object() for uid in session.users},
-    )
+    monkeypatch.setattr(target_module.manager, "get_session_connections", lambda sid: {uid: object() for uid in session.users})
 
 
 def _messages_to(sent, user_id, msg_type=None):
@@ -162,15 +130,11 @@ def _messages_to(sent, user_id, msg_type=None):
     return out
 
 
-# --- 1. Reconnect snapshot v2 + legacy state_sync safety --------------------
-
 @pytest.mark.anyio
 async def test_reconnect_snapshot_hides_staged_and_hidden_tokens_from_player(monkeypatch):
     session, _dm, player, _other, _viewer = _build_full_session()
     sent = await _capture(monkeypatch, content_handlers)
-
     await content_handlers.handle_request_state({}, session, player)
-
     state_msg = _messages_to(sent, player.id, "state_sync")[0]
     assert_no_hidden_token_payload(state_msg, "tok-hidden-npc")
     assert_no_hidden_token_payload(state_msg, "tok-staged-npc")
@@ -181,7 +145,6 @@ async def test_reconnect_snapshot_hides_staged_and_hidden_tokens_from_player(mon
     tokens = state_msg["payload"]["tokens"]
     assert "tok-pc" in tokens
     assert "tok-visible-npc" in tokens
-
     snapshot_msg = _messages_to(sent, player.id, "authoritative_snapshot")[0]
     assert_no_hidden_npc_name(snapshot_msg, "Shadow Assassin")
     assert_no_hidden_npc_name(snapshot_msg, "Ambush Wolves")
@@ -191,9 +154,7 @@ async def test_reconnect_snapshot_hides_staged_and_hidden_tokens_from_player(mon
 async def test_reconnect_snapshot_gives_dm_everything(monkeypatch):
     session, dm, _player, _other, _viewer = _build_full_session()
     sent = await _capture(monkeypatch, content_handlers)
-
     await content_handlers.handle_request_state({}, session, dm)
-
     state_msg = _messages_to(sent, dm.id, "state_sync")[0]
     assert_dm_payload_contains_hidden_when_allowed(state_msg, "tok-hidden-npc")
     assert_dm_payload_contains_hidden_when_allowed(state_msg, "tok-staged-npc")
@@ -204,14 +165,10 @@ async def test_reconnect_snapshot_gives_dm_everything(monkeypatch):
 async def test_reconnect_snapshot_lets_owner_see_own_staged_token(monkeypatch):
     session, _dm, _player, other_player, _viewer = _build_full_session()
     sent = await _capture(monkeypatch, content_handlers)
-
     await content_handlers.handle_request_state({}, session, other_player)
-
     state_msg = _messages_to(sent, other_player.id, "state_sync")[0]
     tokens = state_msg["payload"]["tokens"]
-    # Owner of the staged token can still see it (to place it back from tray).
     assert "tok-staged-other-pc" in tokens
-    # But not a DM-staged NPC ambush, nor another player's hidden NPC info.
     assert "tok-staged-npc" not in tokens
     assert "tok-hidden-npc" not in tokens
 
@@ -220,9 +177,7 @@ async def test_reconnect_snapshot_lets_owner_see_own_staged_token(monkeypatch):
 async def test_reconnect_snapshot_hides_secret_undiscovered_door_for_player(monkeypatch):
     session, _dm, player, _other, _viewer = _build_full_session()
     sent = await _capture(monkeypatch, content_handlers)
-
     await content_handlers.handle_request_state({}, session, player)
-
     snapshot_msg = _messages_to(sent, player.id, "authoritative_snapshot")[0]
     assert snapshot_msg["payload"]["map"]["doors"] == []
 
@@ -231,9 +186,7 @@ async def test_reconnect_snapshot_hides_secret_undiscovered_door_for_player(monk
 async def test_reconnect_snapshot_gives_dm_secret_door_details(monkeypatch):
     session, dm, _player, _other, _viewer = _build_full_session()
     sent = await _capture(monkeypatch, content_handlers)
-
     await content_handlers.handle_request_state({}, session, dm)
-
     snapshot_msg = _messages_to(sent, dm.id, "authoritative_snapshot")[0]
     assert len(snapshot_msg["payload"]["map"]["doors"]) == 1
 
@@ -242,9 +195,7 @@ async def test_reconnect_snapshot_gives_dm_secret_door_details(monkeypatch):
 async def test_reconnect_snapshot_viewer_safe(monkeypatch):
     session, _dm, _player, _other, viewer = _build_full_session()
     sent = await _capture(monkeypatch, content_handlers)
-
     await content_handlers.handle_request_state({}, session, viewer)
-
     state_msg = _messages_to(sent, viewer.id, "state_sync")[0]
     assert_no_hidden_npc_name(state_msg, "Shadow Assassin")
     assert_no_hidden_npc_name(state_msg, "Ambush Wolves")
@@ -252,33 +203,25 @@ async def test_reconnect_snapshot_viewer_safe(monkeypatch):
     assert "tok-staged-other-pc" not in tokens
 
 
-# --- 2. tokens_sync safety ---------------------------------------------------
-
 @pytest.mark.anyio
 async def test_tokens_sync_filters_hidden_staged_and_fog_npcs_per_role(monkeypatch):
     session, dm, player, other_player, viewer = _build_full_session()
     sent = await _capture(monkeypatch, token_handlers)
-
+    _stub_connections_for(monkeypatch, token_handlers, session)
     await _broadcast_token_state_sync(session)
-
     dm_msg = _messages_to(sent, dm.id, "tokens_sync")[0]
     assert_dm_payload_contains_hidden_when_allowed(dm_msg, "tok-hidden-npc")
     assert_dm_payload_contains_hidden_when_allowed(dm_msg, "tok-staged-npc")
-
     player_msg = _messages_to(sent, player.id, "tokens_sync")[0]
     assert_no_hidden_token_payload(player_msg, "tok-hidden-npc")
     assert_no_hidden_token_payload(player_msg, "tok-staged-npc")
     assert_no_hidden_token_payload(player_msg, "tok-staged-other-pc")
-
     other_player_msg = _messages_to(sent, other_player.id, "tokens_sync")[0]
     assert "tok-staged-other-pc" in other_player_msg["payload"]["tokens"]
-
     viewer_msg = _messages_to(sent, viewer.id, "tokens_sync")[0]
     assert_no_hidden_token_payload(viewer_msg, "tok-hidden-npc")
     assert_no_hidden_token_payload(viewer_msg, "tok-staged-npc")
 
-
-# --- 3. Single-token event safety -------------------------------------------
 
 @pytest.mark.anyio
 async def test_token_created_event_not_delivered_to_player_for_hidden_npc(monkeypatch):
@@ -288,11 +231,7 @@ async def test_token_created_event_not_delivered_to_player_for_hidden_npc(monkey
     session.users[dm.id] = dm
     session.users[player.id] = player
     sent = await _capture(monkeypatch, token_handlers)
-
-    await token_handlers.handle_token_create({
-        "name": "Lurking Horror", "x": 0, "y": 0, "hidden": True, "tokenType": "monster",
-    }, session, dm)
-
+    await token_handlers.handle_token_create({"name": "Lurking Horror", "x": 0, "y": 0, "hidden": True, "tokenType": "monster"}, session, dm)
     assert _messages_to(sent, player.id, "token_created") == []
     dm_events = _messages_to(sent, dm.id, "token_created")
     assert len(dm_events) == 1
@@ -307,11 +246,7 @@ async def test_token_created_staged_npc_not_delivered_to_player(monkeypatch):
     session.users[dm.id] = dm
     session.users[player.id] = player
     sent = await _capture(monkeypatch, token_handlers)
-
-    await token_handlers.handle_token_create({
-        "name": "Staged Ambusher", "x": 0, "y": 0, "staged": True, "tokenType": "monster",
-    }, session, dm)
-
+    await token_handlers.handle_token_create({"name": "Staged Ambusher", "x": 0, "y": 0, "staged": True, "tokenType": "monster"}, session, dm)
     assert _messages_to(sent, player.id, "token_created") == []
     assert len(_messages_to(sent, dm.id, "token_created")) == 1
 
@@ -323,22 +258,14 @@ async def test_send_to_staging_does_not_leak_full_payload_to_other_players(monke
     player = User(id="player-1", name="Player", role="player")
     session.users[dm.id] = dm
     session.users[player.id] = player
-    npc = Token(
-        id="tok-npc", name="Secret Boss", x=0, y=0, width=40, height=40,
-        color="#f00", shape="circle", owner_id=None, token_type="npc",
-    )
+    npc = Token(id="tok-npc", name="Secret Boss", x=0, y=0, width=40, height=40, color="#f00", shape="circle", owner_id=None, token_type="npc")
     session.tokens[npc.id] = npc
     sent = await _capture(monkeypatch, token_handlers)
-
     await token_handlers.handle_token_send_to_staging({"token_id": npc.id}, session, dm)
-
-    # Regression test for the leak: previously this was an unconditional
-    # manager.broadcast carrying the raw token (name included) to everyone.
     player_messages = _messages_to(sent, player.id)
     assert_no_hidden_npc_name({"messages": player_messages}, "Secret Boss")
     for msg in player_messages:
         assert msg.get("type") != "token_sent_to_staging"
-
     dm_events = _messages_to(sent, dm.id, "token_sent_to_staging")
     assert len(dm_events) == 1
     assert dm_events[0]["payload"]["name"] == "Secret Boss"
@@ -351,15 +278,10 @@ async def test_send_to_staging_notifies_previous_viewers_with_removal_not_data(m
     player = User(id="player-1", name="Player", role="player")
     session.users[dm.id] = dm
     session.users[player.id] = player
-    npc = Token(
-        id="tok-npc", name="Visible Goblin", x=0, y=0, width=40, height=40,
-        color="#0f0", shape="circle", owner_id=None, token_type="npc",
-    )
+    npc = Token(id="tok-npc", name="Visible Goblin", x=0, y=0, width=40, height=40, color="#0f0", shape="circle", owner_id=None, token_type="npc")
     session.tokens[npc.id] = npc
     sent = await _capture(monkeypatch, token_handlers)
-
     await token_handlers.handle_token_send_to_staging({"token_id": npc.id}, session, dm)
-
     player_events = _messages_to(sent, player.id, "token_removed_hidden")
     assert len(player_events) == 1
     assert_no_hidden_npc_name(player_events[0], "Visible Goblin")
@@ -370,10 +292,7 @@ def test_staged_token_invisible_to_non_owner_via_can_user_see_token():
     owner = User(id="owner-1", name="Owner", role="player")
     other = User(id="other-1", name="Other", role="player")
     dm = User(id="dm-1", name="DM", role="dm")
-    token = Token(
-        id="tok-1", name="Companion", x=0, y=0, width=40, height=40,
-        color="#fff", shape="circle", owner_id=owner.id, token_type="player", staged=True,
-    )
+    token = Token(id="tok-1", name="Companion", x=0, y=0, width=40, height=40, color="#fff", shape="circle", owner_id=owner.id, token_type="player", staged=True)
     assert _can_user_see_token(session, token, dm) is True
     assert _can_user_see_token(session, token, owner) is True
     assert _can_user_see_token(session, token, other) is False
@@ -383,10 +302,7 @@ def test_staged_npc_invisible_to_everyone_but_dm():
     session = Session(id="s-helper-2")
     player = User(id="player-1", name="Player", role="player")
     dm = User(id="dm-1", name="DM", role="dm")
-    npc = Token(
-        id="npc-1", name="Hidden Ambush", x=0, y=0, width=40, height=40,
-        color="#f00", shape="circle", owner_id=None, token_type="monster", staged=True,
-    )
+    npc = Token(id="npc-1", name="Hidden Ambush", x=0, y=0, width=40, height=40, color="#f00", shape="circle", owner_id=None, token_type="monster", staged=True)
     assert _can_user_see_token(session, npc, dm) is True
     assert _can_user_see_token(session, npc, player) is False
 
@@ -398,27 +314,19 @@ async def test_token_hidden_changed_event_removes_token_from_player_view(monkeyp
     player = User(id="player-1", name="Player", role="player")
     session.users[dm.id] = dm
     session.users[player.id] = player
-    npc = Token(
-        id="tok-npc", name="Now Hidden", x=0, y=0, width=40, height=40,
-        color="#f00", shape="circle", owner_id=None, token_type="npc",
-    )
+    npc = Token(id="tok-npc", name="Now Hidden", x=0, y=0, width=40, height=40, color="#f00", shape="circle", owner_id=None, token_type="npc")
     session.tokens[npc.id] = npc
     sent = await _capture(monkeypatch, token_handlers)
-
     npc.hidden = True
     await _broadcast_token_visibility(session, npc, "token_hidden_changed")
-
     player_events = _messages_to(sent, player.id)
     assert len(player_events) == 1
     assert player_events[0]["type"] == "token_removed_hidden"
     assert_no_hidden_npc_name(player_events[0], "Now Hidden")
-
     dm_events = _messages_to(sent, dm.id, "token_hidden_changed")
     assert len(dm_events) == 1
     assert dm_events[0]["payload"]["name"] == "Now Hidden"
 
-
-# --- 4. Combat payload safety ------------------------------------------------
 
 def test_combat_state_payload_excludes_hidden_staged_npc_for_player_includes_for_dm():
     session = Session(id="s-combat")
@@ -426,36 +334,17 @@ def test_combat_state_payload_excludes_hidden_staged_npc_for_player_includes_for
     player = User(id="player-1", name="Player", role="player")
     session.users[dm.id] = dm
     session.users[player.id] = player
-    hidden_npc = Token(
-        id="npc-hidden", name="Hidden Combatant", x=0, y=0, width=40, height=40,
-        color="#f00", shape="circle", owner_id=None, token_type="npc", hidden=True,
-    )
-    staged_npc = Token(
-        id="npc-staged", name="Staged Combatant", x=0, y=0, width=40, height=40,
-        color="#a00", shape="circle", owner_id=None, token_type="monster", staged=True,
-    )
-    visible_npc = Token(
-        id="npc-visible", name="Visible Combatant", x=0, y=0, width=40, height=40,
-        color="#0f0", shape="circle", owner_id=None, token_type="npc",
-    )
+    hidden_npc = Token(id="npc-hidden", name="Hidden Combatant", x=0, y=0, width=40, height=40, color="#f00", shape="circle", owner_id=None, token_type="npc", hidden=True)
+    staged_npc = Token(id="npc-staged", name="Staged Combatant", x=0, y=0, width=40, height=40, color="#a00", shape="circle", owner_id=None, token_type="monster", staged=True)
+    visible_npc = Token(id="npc-visible", name="Visible Combatant", x=0, y=0, width=40, height=40, color="#0f0", shape="circle", owner_id=None, token_type="npc")
     session.tokens = {hidden_npc.id: hidden_npc, staged_npc.id: staged_npc, visible_npc.id: visible_npc}
-    session.combat = {
-        "active": True, "turn": 0, "revision": 1,
-        "combatants": [
-            {"token_id": hidden_npc.id, "id": "c1", "name": hidden_npc.name},
-            {"token_id": staged_npc.id, "id": "c2", "name": staged_npc.name},
-            {"token_id": visible_npc.id, "id": "c3", "name": visible_npc.name},
-        ],
-        "suspended_combatants": [],
-    }
-
+    session.combat = {"active": True, "turn": 0, "revision": 1, "combatants": [{"token_id": hidden_npc.id, "id": "c1", "name": hidden_npc.name}, {"token_id": staged_npc.id, "id": "c2", "name": staged_npc.name}, {"token_id": visible_npc.id, "id": "c3", "name": visible_npc.name}], "suspended_combatants": []}
     player_payload = _combat_state_payload_for_user(session, player)
     player_token_ids = {c["token_id"] for c in player_payload["combatants"]}
     assert player_token_ids == {visible_npc.id}
     assert "suspended_combatants" not in player_payload
     assert_no_hidden_npc_name(player_payload, "Hidden Combatant")
     assert_no_hidden_npc_name(player_payload, "Staged Combatant")
-
     dm_payload = _combat_state_payload_for_user(session, dm)
     dm_token_ids = {c["token_id"] for c in dm_payload["combatants"]}
     assert dm_token_ids == {hidden_npc.id, staged_npc.id, visible_npc.id}
@@ -468,25 +357,15 @@ async def test_broadcast_combat_does_not_leak_hidden_combatant_to_player(monkeyp
     player = User(id="player-1", name="Player", role="player")
     session.users[dm.id] = dm
     session.users[player.id] = player
-    hidden_npc = Token(
-        id="npc-hidden", name="Secret Lich", x=0, y=0, width=40, height=40,
-        color="#f00", shape="circle", owner_id=None, token_type="npc", hidden=True,
-    )
+    hidden_npc = Token(id="npc-hidden", name="Secret Lich", x=0, y=0, width=40, height=40, color="#f00", shape="circle", owner_id=None, token_type="npc", hidden=True)
     session.tokens[hidden_npc.id] = hidden_npc
-    session.combat = {
-        "active": True, "turn": 0, "revision": 0,
-        "combatants": [{"token_id": hidden_npc.id, "id": "c1", "name": hidden_npc.name}],
-        "suspended_combatants": [],
-    }
+    session.combat = {"active": True, "turn": 0, "revision": 0, "combatants": [{"token_id": hidden_npc.id, "id": "c1", "name": hidden_npc.name}], "suspended_combatants": []}
     sent = await _capture(monkeypatch, combat_handlers)
     _stub_connections_for(monkeypatch, combat_handlers, session)
-
     await _broadcast_combat(session)
-
     player_msg = _messages_to(sent, player.id, "combat_state")[0]
     assert_no_hidden_npc_name(player_msg, "Secret Lich")
     assert player_msg["payload"]["combatants"] == []
-
     dm_msg = _messages_to(sent, dm.id, "combat_state")[0]
     assert len(dm_msg["payload"]["combatants"]) == 1
 
@@ -494,31 +373,15 @@ async def test_broadcast_combat_does_not_leak_hidden_combatant_to_player(monkeyp
 @pytest.mark.anyio
 async def test_sync_combat_visibility_suspends_staged_combatant():
     session = Session(id="s-combat-sync")
-    viewer = Token(
-        id="pc-1", name="Hero", x=0, y=0, width=40, height=40,
-        color="#fff", shape="circle", owner_id="user-1", token_type="player",
-        vision_enabled=True, vision_radius=2000,
-    )
-    npc = Token(
-        id="npc-1", name="Staged Wolf", x=10, y=10, width=40, height=40,
-        color="#f00", shape="circle", owner_id=None, token_type="monster", staged=True,
-    )
+    viewer = Token(id="pc-1", name="Hero", x=0, y=0, width=40, height=40, color="#fff", shape="circle", owner_id="user-1", token_type="player", vision_enabled=True, vision_radius=2000)
+    npc = Token(id="npc-1", name="Staged Wolf", x=10, y=10, width=40, height=40, color="#f00", shape="circle", owner_id=None, token_type="monster", staged=True)
     session.tokens[viewer.id] = viewer
     session.tokens[npc.id] = npc
-    session.combat = {
-        "active": True,
-        "combatants": [{"token_id": npc.id, "id": "c1", "name": npc.name, "map_context": "world"}],
-        "turn": 0,
-        "suspended_combatants": [],
-        "fog_suspended_combatants": [],
-        "hidden_suspended_combatants": [],
-    }
+    session.combat = {"active": True, "combatants": [{"token_id": npc.id, "id": "c1", "name": npc.name, "map_context": "world"}], "turn": 0, "suspended_combatants": [], "fog_suspended_combatants": [], "hidden_suspended_combatants": []}
     result = sync_combat_visibility(session, map_context="world", reason="test")
     assert result["changed"] is True
     assert session.combat["combatants"] == []
 
-
-# --- 5. Door/wall secret data payload safety (editor_props_sync) -----------
 
 @pytest.mark.anyio
 async def test_editor_props_sync_filters_secret_door_per_recipient(monkeypatch):
@@ -527,29 +390,18 @@ async def test_editor_props_sync_filters_secret_door_per_recipient(monkeypatch):
     player = User(id="player-1", name="Player", role="player")
     session.users[dm.id] = dm
     session.users[player.id] = player
-    session.editor_props = {"world": [{
-        "id": "door-1", "kind": "door", "x": 0, "y": 0, "facing": "v",
-        "state": "closed", "locked": False, "blocks_vision": True,
-        "secret": True, "revealed": False,
-    }]}
+    session.editor_props = {"world": [{"id": "door-1", "kind": "door", "x": 0, "y": 0, "facing": "v", "state": "closed", "locked": False, "blocks_vision": True, "secret": True, "revealed": False}]}
     sent = await _capture(monkeypatch, map_editor)
-
     await map_editor._broadcast_editor_props_state(session)
-
     player_msg = _messages_to(sent, player.id, "editor_props_sync")[0]
     assert player_msg["payload"]["props"]["world"] == []
-
     dm_msg = _messages_to(sent, dm.id, "editor_props_sync")[0]
     assert len(dm_msg["payload"]["props"]["world"]) == 1
     assert dm_msg["payload"]["props"]["world"][0]["secret"] is True
 
 
 def test_filter_editor_props_for_role_strips_secret_metadata_even_when_revealed():
-    editor_props = {"world": [{
-        "id": "door-1", "kind": "door", "x": 0, "y": 0, "facing": "v",
-        "state": "open", "locked": False, "blocks_vision": True,
-        "secret": True, "revealed": True,
-    }]}
+    editor_props = {"world": [{"id": "door-1", "kind": "door", "x": 0, "y": 0, "facing": "v", "state": "open", "locked": False, "blocks_vision": True, "secret": True, "revealed": True}]}
     player_view = filter_editor_props_for_role(editor_props, "player")
     assert len(player_view["world"]) == 1
     assert "secret" not in player_view["world"][0]
