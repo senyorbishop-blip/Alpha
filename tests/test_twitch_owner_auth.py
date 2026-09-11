@@ -20,6 +20,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 import main
+import server.auth.models as auth_models
+import server.db as db_module
 from server.auth.jwt_utils import create_token
 from server.auth.models import (
     claim_campaign,
@@ -38,6 +40,12 @@ _CSRF = "c" * 32
 def _twitch_env(monkeypatch):
     monkeypatch.setenv("TWITCH_CLIENT_ID", "test-client-id")
     monkeypatch.setenv("TWITCH_CLIENT_SECRET", "test-client-secret")
+    # Full-suite collection may import server.paths before this module gets a
+    # chance to set DND_DB_PATH. Pin both persistence modules explicitly so
+    # save_campaign() and auth ownership queries always use the same isolated DB.
+    db_path = os.path.join(_TMP, "campaigns.db")
+    monkeypatch.setattr(db_module, "DB_PATH", db_path)
+    monkeypatch.setattr(auth_models, "DB_PATH", db_path)
     init_db()
     init_auth_db()
     yield
