@@ -9,6 +9,15 @@ class CaptureManager:
         self.sent = []
         self.broadcasts = []
 
+    def get_session_connections(self, session_id):
+        """Match the live connection-manager surface used by camp-rest sync.
+
+        These focused unit tests do not need connected recipients, but the
+        production handler now queries active session connections before
+        broadcasting character/quick-action hydration updates.
+        """
+        return {}
+
     async def send_to(self, session_id, user_id, message):
         self.sent.append((session_id, user_id, message))
 

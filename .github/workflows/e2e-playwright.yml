@@ -34,6 +34,7 @@ jobs:
       - name: Run browser E2E tests
         env:
           DND_E2E_DATA_DIR: ${{ runner.temp }}/casual-dnd-e2e-data
+          AUTH_RATE_LIMIT_ENABLED: 'false'
         run: npm run test:e2e
 
       - name: Upload Playwright report on failure
