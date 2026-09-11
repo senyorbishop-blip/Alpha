@@ -61,7 +61,8 @@ def test_resolve_token_character_profile_by_profile_id_and_runtime_merge_preserv
     )
     session.tokens[token.id] = token
 
-    assert resolve_token_character_profile(session, token)["id"] == "prof-1"
+    resolved = resolve_token_character_profile(session, token)
+    assert resolved["id"] == "prof-1"
     payload = build_token_runtime_payload(session, token)
 
     assert payload["profile_id"] == "prof-1"
@@ -81,8 +82,14 @@ def test_resolve_token_character_profile_by_profile_id_and_runtime_merge_preserv
     assert payload["x"] == 10
     assert payload["y"] == 20
     assert payload["map_context"] == "dungeon-1"
-    assert payload["actions"][0]["id"] == "longbow"
-    assert payload["spells"][0]["id"] == "hunters-mark"
+
+    # Full action/spell collections stay on the linked profile and are fetched
+    # through the character/profile path; token broadcasts carry only the slim
+    # identity/combat summary above.
+    assert resolved["nativeCharacter"]["actions"][0]["id"] == "longbow"
+    assert resolved["nativeCharacter"]["spells"][0]["id"] == "hunters-mark"
+    assert "actions" not in payload
+    assert "spells" not in payload
 
 
 def test_active_profile_update_changes_token_display_without_moving_or_resetting_hp():
