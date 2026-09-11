@@ -11,6 +11,9 @@ class CaptureManager:
         self.sent = []
         self.broadcasts = []
 
+    def get_session_connections(self, _session_id):
+        return {"dm": object(), "p1": object(), "p2": object(), "v1": object()}
+
     async def send_to(self, session_id, user_id, message):
         self.sent.append((session_id, user_id, message))
 
@@ -254,9 +257,6 @@ def test_short_rest_absolute_hp_contract_is_idempotent_after_prior_token_vitals(
     capture = _patch(monkeypatch)
     session, player, *_ = _session()
     owner_key, _profile_id = _attach_active_profile(session, player)
-    # Simulate the live client's optimistic token vitals edit arriving before
-    # the final character_rest packet.  The rest packet carries absolute HP, so
-    # the server must not add healed_amount a second time.
     session.tokens["alice-1"].hp = 7
 
     asyncio.run(camp_rest.handle_character_self_rest({
