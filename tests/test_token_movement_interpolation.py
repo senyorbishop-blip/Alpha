@@ -36,12 +36,6 @@ def _build_session():
     return session, dm, player, token
 
 
-# ---------------------------------------------------------------------------
-# Server-side: handle_token_move still rejects stale revisions / stays
-# authoritative. Interpolation is a client-display-only concern, so the
-# server path must be completely unaffected by this patch.
-# ---------------------------------------------------------------------------
-
 @pytest.mark.anyio
 async def test_handle_token_move_still_stamps_increasing_revision(monkeypatch):
     session, _dm, player, token = _build_session()
@@ -66,16 +60,8 @@ async def test_handle_token_move_still_stamps_increasing_revision(monkeypatch):
 
     assert len(captured) == 2
     assert captured[1]["visibility_revision"] > captured[0]["visibility_revision"]
-    # Server token state is the authoritative final value — no interpolation here.
     assert token.x == 20 and token.y == 20
 
-
-# ---------------------------------------------------------------------------
-# Client-side harness: extract the real helpers + token_moved case body from
-# play.html and run them in node, same approach as
-# test_token_move_revision_guard.py, so we're testing the shipped code, not
-# a re-implementation of it.
-# ---------------------------------------------------------------------------
 
 def _stale_guard_snippet() -> str:
     src = PLAY.read_text(encoding="utf-8")
@@ -99,18 +85,12 @@ def test_play_html_defines_interpolation_helpers():
 
 
 def test_play_html_token_moved_case_still_checks_stale_visibility_payload():
-    # Keep existing stale-revision guard intact (point 10 of the spec).
     snippet = _token_moved_case_snippet()
     assert "_isStaleVisibilityPayload(p)" in snippet
     assert "break;" in snippet
 
 
 def _run_node(initial_tokens, payloads, *, with_raf=True, drag=None, extra_setup=""):
-    """Runs the real helpers + token_moved case body extracted from play.html.
-
-    `with_raf` simulates whether a render loop / requestAnimationFrame is
-    available in the browser (point 9: fallback to direct movement when not).
-    """
     raf_polyfill = """
 function requestAnimationFrame(cb) { return 1; }
 function _nowMs() { return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now(); }
@@ -122,6 +102,7 @@ function flushRaf(advanceMs) {
     drag_obj = drag or {"active": False, "tokenId": ""}
 
     code = f"""
+const ROLE = 'player';
 {raf_polyfill}
 {_stale_guard_snippet()}
 
@@ -149,9 +130,6 @@ console.log(JSON.stringify(results));
 
 
 def test_valid_token_moved_updates_authoritative_target():
-    # Small, in-range move: interpolation may be queued, but the stored
-    # "to" target inside the animation (and the eventual token state) must
-    # be the exact server-approved x/y.
     initial = {"tok-1": {"id": "tok-1", "x": 0, "y": 0}}
     payloads = [{"token_id": "tok-1", "x": 30, "y": 30, "visibility_revision": 1, "__advanceMs": 1000}]
     results = _run_node(initial, payloads)
@@ -168,13 +146,9 @@ def test_missing_revision_payload_still_applies_backward_compatible():
 
 
 def test_teleport_distance_snaps_immediately_without_animation():
-    # A jump far larger than the snap-distance threshold must land on the
-    # server position on the very same tick, with no animation frames run.
     initial = {"tok-1": {"id": "tok-1", "x": 0, "y": 0}}
     payloads = [{"token_id": "tok-1", "x": 5000, "y": 5000, "visibility_revision": 1}]
     results = _run_node(initial, payloads, with_raf=True)
-    # No __advanceMs flush at all — if this were animating, x/y would still
-    # be at the "from" position (0,0) rather than the snapped target.
     assert results[0]["tok-1"]["x"] == 5000
     assert results[0]["tok-1"]["y"] == 5000
 
@@ -188,8 +162,6 @@ def test_hidden_token_does_not_interpolate_and_snaps():
 
 
 def test_removed_token_path_is_a_noop_not_an_error():
-    # Token no longer present locally (e.g. raced with a delete) — the case
-    # must not throw and must not resurrect the token.
     initial = {}
     payloads = [{"token_id": "tok-1", "x": 15, "y": 15, "visibility_revision": 1}]
     results = _run_node(initial, payloads, with_raf=True)
@@ -203,9 +175,6 @@ def test_interpolation_retargets_when_newer_token_moved_arrives_mid_flight():
         {"token_id": "tok-1", "x": 80, "y": 0, "visibility_revision": 2, "__advanceMs": 1000},
     ]
     results = _run_node(initial, payloads, with_raf=True)
-    # First payload queued an animation toward (40, 0); before it can finish,
-    # the second (newer) payload must retarget it — final position is the
-    # latest server-approved x/y, not the first target.
     assert results[1]["tok-1"]["x"] == 80
     assert results[1]["tok-1"]["y"] == 0
 
@@ -219,9 +188,6 @@ def test_final_committed_state_equals_latest_server_position_after_full_flight()
 
 
 def test_local_drag_path_is_not_delayed_by_interpolation():
-    # When this client is actively dragging the same token, the existing
-    # echo-suppression `break` fires before any interpolation code runs, so
-    # the locally-dragged position is left completely untouched.
     initial = {"tok-1": {"id": "tok-1", "x": 7, "y": 9}}
     payloads = [{"token_id": "tok-1", "x": 999, "y": 999, "visibility_revision": 1}]
     results = _run_node(initial, payloads, with_raf=True, drag={"active": True, "tokenId": "tok-1"})
@@ -230,9 +196,6 @@ def test_local_drag_path_is_not_delayed_by_interpolation():
 
 
 def test_fallback_applies_direct_movement_when_raf_unavailable():
-    # No requestAnimationFrame / render loop in this environment: queueing
-    # must fail and the case must fall back to an instant snap rather than
-    # leaving the token stuck at its old position.
     initial = {"tok-1": {"id": "tok-1", "x": 0, "y": 0}}
     payloads = [{"token_id": "tok-1", "x": 30, "y": 30, "visibility_revision": 1}]
     results = _run_node(initial, payloads, with_raf=False)
@@ -244,7 +207,7 @@ def test_stale_visibility_revision_payload_still_rejected_with_interpolation_pat
     initial = {"tok-1": {"id": "tok-1", "x": 10, "y": 10}}
     payloads = [
         {"token_id": "tok-1", "x": 10, "y": 10, "visibility_revision": 5, "__advanceMs": 1000},
-        {"token_id": "tok-1", "x": 99, "y": 99, "visibility_revision": 3, "__advanceMs": 1000},  # stale
+        {"token_id": "tok-1", "x": 99, "y": 99, "visibility_revision": 3, "__advanceMs": 1000},
         {"token_id": "tok-1", "x": 20, "y": 20, "visibility_revision": 6, "__advanceMs": 1000},
     ]
     results = _run_node(initial, payloads, with_raf=True)
