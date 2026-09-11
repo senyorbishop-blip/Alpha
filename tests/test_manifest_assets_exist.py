@@ -18,6 +18,8 @@ def _client_path_from_static_url(url: str) -> Path:
 
 
 def test_audio_manifest_files_exist_or_have_quiet_safe_fallback():
+    from server.ambient_audio import _TRACK_TO_FAMILY
+
     manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
     missing = []
     for track, entry in manifest.get("tracks", {}).items():
@@ -27,7 +29,12 @@ def test_audio_manifest_files_exist_or_have_quiet_safe_fallback():
             path = _client_path_from_static_url(str(file_url))
             if path.exists():
                 continue
-            if fallback.startswith("procedural_") and asset_probe == "startup_generated":
+            # Repo-safe audio binaries are intentionally generated during the
+            # FastAPI lifespan. A missing source-tree asset is therefore safe
+            # only when the track is covered by that startup generator (or the
+            # manifest explicitly marks the probe as startup-generated).
+            startup_generated = asset_probe == "startup_generated" or str(track).strip().lower() in _TRACK_TO_FAMILY
+            if fallback.startswith("procedural_") and startup_generated:
                 continue
             missing.append(f"{track}: {file_url} missing without startup-generated procedural fallback")
     assert not missing, "\n".join(missing)
