@@ -374,13 +374,18 @@ async def test_item_spell_ack_does_not_replace_inventory_state_sync(monkeypatch,
     monkeypatch.setattr(inventory_handlers, "_send_inventory_state", _capture_send_inventory_state)
 
     session, user, dm, owner_key = _setup_inventory_session([_make_wand()])
+    monkeypatch.setattr(
+        inventory_handlers.manager,
+        "get_session_connections",
+        lambda _sid: {uid: object() for uid in session.users},
+    )
 
     await inventory_handlers.handle_inventory_cast_item_spell(
         {"item_index": 0, "item_id": "wand-of-secrets", "spell_id": "detect-magic", "client_action_id": "ck-12"},
         session, user,
     )
 
-    # _broadcast_inventory_state fans the sync out to every session user.
+    # _broadcast_inventory_state fans the sync out to every connected session user.
     assert set(sync_calls) == set(session.users.keys())
     assert len(_acks(patched, user_id=user.id, action="inventory_cast_item_spell")) == 1
 
